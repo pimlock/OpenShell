@@ -22,6 +22,16 @@ use std::collections::HashMap;
 
 const REGISTRY_NAMESPACE_DEFAULT: &str = "openshell";
 
+/// Returns true if the Docker daemon has CDI enabled.
+///
+/// CDI is considered enabled when the daemon reports at least one CDI spec
+/// directory via `GET /info` (`SystemInfo.CDISpecDirs`). An empty list or a
+/// missing field means CDI is not configured, and we fall back to the legacy
+/// NVIDIA `DeviceRequest` (driver="nvidia").
+fn cdi_enabled(cdi_spec_dirs: Option<&[String]>) -> bool {
+    cdi_spec_dirs.is_some_and(|dirs| !dirs.is_empty())
+}
+
 const REGISTRY_MODE_EXTERNAL: &str = "external";
 
 fn env_non_empty(key: &str) -> Option<String> {
@@ -455,6 +465,7 @@ pub async fn ensure_container(
     registry_username: Option<&str>,
     registry_token: Option<&str>,
     gpu: bool,
+    cdi_enabled: bool,
 ) -> Result<()> {
     let container_name = container_name(name);
 
@@ -542,20 +553,38 @@ pub async fn ensure_container(
         ..Default::default()
     };
 
-    // When GPU support is requested, add NVIDIA device requests.
-    // This is the programmatic equivalent of `docker run --gpus all`.
-    // The NVIDIA Container Toolkit runtime hook injects /dev/nvidia* devices
-    // and GPU driver libraries from the host into the container.
+    // When GPU support is requested, inject GPU devices into the container.
+    //
+    // When the daemon reports CDI spec directories (SystemInfo.CDISpecDirs) we
+    // use an explicit CDI device request: driver="cdi" with the CDI-qualified
+    // device name "nvidia.com/gpu=all". Docker resolves this against the host
+    // CDI spec. This makes the injection declarative and decouples spec
+    // generation from spec consumption.
+    //
+    // When CDI is not enabled on the daemon, we fall back to the legacy NVIDIA
+    // device request (driver="nvidia", count=-1) which triggers the NVIDIA
+    // Container Runtime hook to inject /dev/nvidia* devices and driver libraries
+    // at container start. The failure modes for both paths are similar: if the
+    // NVIDIA Container Toolkit is not installed, or the CDI specs are
+    // stale/missing, the request will fail at container-start time.
     if gpu {
-        host_config.device_requests = Some(vec![DeviceRequest {
-            driver: Some("nvidia".to_string()),
-            count: Some(-1), // all GPUs
-            capabilities: Some(vec![vec![
-                "gpu".to_string(),
-                "utility".to_string(),
-                "compute".to_string(),
-            ]]),
-            ..Default::default()
+        host_config.device_requests = Some(vec![if cdi_enabled {
+            DeviceRequest {
+                driver: Some("cdi".to_string()),
+                device_ids: Some(vec!["nvidia.com/gpu=all".to_string()]),
+                ..Default::default()
+            }
+        } else {
+            DeviceRequest {
+                driver: Some("nvidia".to_string()),
+                count: Some(-1), // all GPUs
+                capabilities: Some(vec![vec![
+                    "gpu".to_string(),
+                    "utility".to_string(),
+                    "compute".to_string(),
+                ]]),
+                ..Default::default()
+            }
         }]);
     }
 
@@ -1194,5 +1223,27 @@ mod tests {
             sockets.len() <= 10,
             "should return a reasonable number of sockets"
         );
+    }
+
+    #[test]
+    fn cdi_enabled_with_spec_dirs() {
+        let dirs = vec!["/etc/cdi".to_string(), "/var/run/cdi".to_string()];
+        assert!(cdi_enabled(Some(&dirs)));
+    }
+
+    #[test]
+    fn cdi_enabled_with_single_spec_dir() {
+        let dirs = vec!["/etc/cdi".to_string()];
+        assert!(cdi_enabled(Some(&dirs)));
+    }
+
+    #[test]
+    fn cdi_enabled_with_empty_spec_dirs() {
+        assert!(!cdi_enabled(Some(&[])));
+    }
+
+    #[test]
+    fn cdi_enabled_with_none() {
+        assert!(!cdi_enabled(None));
     }
 }

@@ -288,6 +288,15 @@ where
         (preflight.docker, None)
     };
 
+    // CDI support is detected via SystemInfo.CDISpecDirs (best-effort — failure
+    // is non-fatal and results in a legacy GPU injection fallback).
+    let cdi_supported = target_docker
+        .info()
+        .await
+        .ok()
+        .and_then(|info| info.cdi_spec_dirs)
+        .is_some_and(|dirs| !dirs.is_empty());
+
     // If an existing gateway is found, either tear it down (when recreate is
     // requested) or bail out so the caller can prompt the user / reuse it.
     if let Some(existing) = check_existing_gateway(&target_docker, &name).await? {
@@ -417,6 +426,7 @@ where
             registry_username.as_deref(),
             registry_token.as_deref(),
             gpu,
+            cdi_supported,
         )
         .await?;
         start_container(&target_docker, &name).await?;
