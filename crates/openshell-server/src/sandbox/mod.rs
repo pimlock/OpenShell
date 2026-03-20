@@ -869,12 +869,7 @@ fn sandbox_template_to_k8s(
     }
 
     let mut spec = serde_json::Map::new();
-    if gpu {
-        spec.insert(
-            "runtimeClassName".to_string(),
-            serde_json::json!(GPU_RUNTIME_CLASS_NAME),
-        );
-    } else if !template.runtime_class_name.is_empty() {
+    if !template.runtime_class_name.is_empty() {
         spec.insert(
             "runtimeClassName".to_string(),
             serde_json::json!(template.runtime_class_name),
@@ -985,6 +980,124 @@ fn sandbox_template_to_k8s(
     apply_supervisor_sideload(&mut result);
 
     result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inject_pod_template(
+    mut pod_template: serde_json::Value,
+    template: &SandboxTemplate,
+    gpu: bool,
+    default_image: &str,
+    image_pull_policy: &str,
+    sandbox_id: &str,
+    sandbox_name: &str,
+    grpc_endpoint: &str,
+    ssh_listen_addr: &str,
+    ssh_handshake_secret: &str,
+    ssh_handshake_skew_secs: u64,
+    spec_environment: &std::collections::HashMap<String, String>,
+    client_tls_secret_name: &str,
+    host_gateway_ip: &str,
+) -> serde_json::Value {
+    let Some(spec) = pod_template
+        .get_mut("spec")
+        .and_then(|value| value.as_object_mut())
+    else {
+        return pod_template;
+    };
+
+    // Add hostAliases so sandbox pods can reach the Docker host.
+    if !host_gateway_ip.is_empty() {
+        spec.insert(
+            "hostAliases".to_string(),
+            serde_json::json!([{
+                "ip": host_gateway_ip,
+                "hostnames": ["host.docker.internal", "host.openshell.internal"]
+            }]),
+        );
+    }
+
+    // Inject TLS volume at the pod spec level.  Mode 0400 (owner-read)
+    // prevents the unprivileged sandbox user from reading the mTLS private key.
+    if !client_tls_secret_name.is_empty() {
+        let volumes = spec
+            .entry("volumes")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(volumes_arr) = volumes.as_array_mut() {
+            volumes_arr.push(serde_json::json!({
+                "name": "openshell-client-tls",
+                "secret": { "secretName": client_tls_secret_name, "defaultMode": 256 }
+            }));
+        }
+    }
+
+    let Some(containers) = spec
+        .get_mut("containers")
+        .and_then(|value| value.as_array_mut())
+    else {
+        return pod_template;
+    };
+    if containers.is_empty() {
+        return pod_template;
+    }
+
+    let mut target_index = None;
+    for (index, container) in containers.iter().enumerate() {
+        if container.get("name").and_then(|value| value.as_str()) == Some("agent") {
+            target_index = Some(index);
+            break;
+        }
+    }
+    let index = target_index.unwrap_or(0);
+    if let Some(container) = containers.get_mut(index) {
+        update_container_env(
+            container,
+            template,
+            sandbox_id,
+            sandbox_name,
+            grpc_endpoint,
+            ssh_listen_addr,
+            ssh_handshake_secret,
+            ssh_handshake_skew_secs,
+            spec_environment,
+            !client_tls_secret_name.is_empty(),
+        );
+
+        // Inject imagePullPolicy on the agent container.
+        if !image_pull_policy.is_empty() {
+            if let Some(container_obj) = container.as_object_mut() {
+                container_obj.insert(
+                    "imagePullPolicy".to_string(),
+                    serde_json::json!(image_pull_policy),
+                );
+            }
+        }
+
+        // Inject TLS volumeMount on the agent container.
+        if !client_tls_secret_name.is_empty()
+            && let Some(container_obj) = container.as_object_mut()
+        {
+            let mounts = container_obj
+                .entry("volumeMounts")
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let Some(mounts_arr) = mounts.as_array_mut() {
+                mounts_arr.push(serde_json::json!({
+                    "name": "openshell-client-tls",
+                    "mountPath": "/etc/openshell-tls/client",
+                    "readOnly": true
+                }));
+            }
+        }
+
+        if gpu {
+            apply_gpu_to_container(container);
+        }
+    }
+
+    // Always side-load the supervisor binary from the node filesystem
+    apply_supervisor_sideload(&mut pod_template);
+
+    pod_template
 }
 
 fn container_resources(template: &SandboxTemplate, gpu: bool) -> Option<serde_json::Value> {
@@ -1641,6 +1754,41 @@ mod tests {
     }
 
     #[test]
+    fn gpu_inject_pod_template_does_not_set_runtime_class() {
+        let pod_template = serde_json::json!({
+            "spec": {
+                "containers": [{"name": "agent"}]
+            }
+        });
+
+        let result = inject_pod_template(
+            pod_template,
+            &SandboxTemplate::default(),
+            true,
+            "openshell/sandbox:latest",
+            "",
+            "sandbox-id",
+            "sandbox-name",
+            "https://gateway.example.com",
+            "0.0.0.0:2222",
+            "secret",
+            300,
+            &std::collections::HashMap::new(),
+            "",
+            "",
+        );
+
+        assert!(
+            result["spec"]["runtimeClassName"].is_null(),
+            "GPU pods using CDI injection must not have runtimeClassName set"
+        );
+        assert_eq!(
+            result["spec"]["containers"][0]["resources"]["limits"][GPU_RESOURCE_NAME],
+            serde_json::json!(GPU_RESOURCE_QUANTITY)
+        );
+    }
+
+    #[test]
     fn gpu_sandbox_adds_runtime_class_and_gpu_limit() {
         let pod_template = sandbox_template_to_k8s(
             &SandboxTemplate::default(),
@@ -1660,7 +1808,7 @@ mod tests {
 
         assert_eq!(
             pod_template["spec"]["runtimeClassName"],
-            serde_json::json!(GPU_RUNTIME_CLASS_NAME)
+            serde_json::Value::Null
         );
         assert_eq!(
             pod_template["spec"]["containers"][0]["resources"]["limits"][GPU_RESOURCE_NAME],
@@ -1708,6 +1856,68 @@ mod tests {
         assert_eq!(limits["cpu"], serde_json::json!("2"));
         assert_eq!(
             limits[GPU_RESOURCE_NAME],
+            serde_json::json!(GPU_RESOURCE_QUANTITY)
+        );
+    }
+
+    #[test]
+    fn gpu_sandbox_updates_custom_pod_template() {
+        let template = SandboxTemplate {
+            pod_template: Some(Struct {
+                fields: [(
+                    "spec".to_string(),
+                    Value {
+                        kind: Some(Kind::StructValue(Struct {
+                            fields: [(
+                                "containers".to_string(),
+                                Value {
+                                    kind: Some(Kind::ListValue(prost_types::ListValue {
+                                        values: vec![Value {
+                                            kind: Some(Kind::StructValue(Struct {
+                                                fields: [(
+                                                    "name".to_string(),
+                                                    string_value("agent"),
+                                                )]
+                                                .into_iter()
+                                                .collect(),
+                                            })),
+                                        }],
+                                    })),
+                                },
+                            )]
+                            .into_iter()
+                            .collect(),
+                        })),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            ..SandboxTemplate::default()
+        };
+
+        let pod_template = sandbox_template_to_k8s(
+            &template,
+            true,
+            "openshell/sandbox:latest",
+            "",
+            "sandbox-id",
+            "sandbox-name",
+            "https://gateway.example.com",
+            "0.0.0.0:2222",
+            "secret",
+            300,
+            &std::collections::HashMap::new(),
+            "",
+            "",
+        );
+
+        assert_eq!(
+            pod_template["spec"]["runtimeClassName"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            pod_template["spec"]["containers"][0]["resources"]["limits"][GPU_RESOURCE_NAME],
             serde_json::json!(GPU_RESOURCE_QUANTITY)
         );
     }
