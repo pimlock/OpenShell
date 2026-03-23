@@ -255,6 +255,7 @@ RUN mkdir -p /var/lib/rancher/k3s/server/manifests \
              /opt/openshell/manifests \
              /opt/openshell/charts \
              /opt/openshell/gpu-manifests \
+             /opt/openshell/gpu-manifests-wsl2 \
              /run/flannel
 
 COPY deploy/docker/cluster-entrypoint.sh /usr/local/bin/cluster-entrypoint.sh
@@ -266,6 +267,7 @@ RUN chmod +x /usr/local/bin/cluster-healthcheck.sh
 COPY deploy/docker/.build/charts/*.tgz /opt/openshell/charts/
 COPY deploy/kube/manifests/*.yaml /opt/openshell/manifests/
 COPY deploy/kube/gpu-manifests/*.yaml /opt/openshell/gpu-manifests/
+COPY deploy/kube/gpu-manifests-wsl2/*.yaml /opt/openshell/gpu-manifests-wsl2/
 
 ENTRYPOINT ["/usr/local/bin/cluster-entrypoint.sh"]
 

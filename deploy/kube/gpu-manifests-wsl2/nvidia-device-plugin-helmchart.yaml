@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# WSL2-specific override for the upstream NVIDIA device plugin chart.
+#
+# Nested k3s on WSL2 does not expose normal NVIDIA PCI topology under
+# /sys/bus/pci, so NFD/GFD never add the labels that the default chart affinity
+# requires. Override the chart values to use CDI injection without label-gated
+# scheduling.
+
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: nvidia-device-plugin
+  namespace: kube-system
+spec:
+  repo: https://nvidia.github.io/k8s-device-plugin
+  chart: nvidia-device-plugin
+  version: 0.18.2
+  targetNamespace: nvidia-device-plugin
+  createNamespace: true
+  failurePolicy: reinstall
+  valuesContent: |-
+    runtimeClassName: nvidia
+    deviceListStrategy: cdi-cri
+    deviceIDStrategy: index
+    cdi:
+      nvidiaHookPath: /usr/bin/nvidia-cdi-hook
+    nvidiaDriverRoot: "/"
+    affinity: null
+    gfd:
+      enabled: false
+    nfd:
+      enabled: false

@@ -247,6 +247,175 @@ else
     echo "Warning: REGISTRY_HOST not set; skipping registry config"
 fi
 
+is_wsl2_gpu_environment() {
+    [ -c /dev/dxg ]
+}
+
+copy_manifest_dir() {
+    src_dir=$1
+    [ -d "$src_dir" ] || return 0
+
+    for manifest in "$src_dir"/*.yaml; do
+        [ ! -f "$manifest" ] && continue
+        cp "$manifest" "$K3S_MANIFESTS/"
+    done
+}
+
+remove_manifest_dir() {
+    src_dir=$1
+    [ -d "$src_dir" ] || return 0
+
+    for manifest in "$src_dir"/*.yaml; do
+        [ ! -f "$manifest" ] && continue
+        rm -f "$K3S_MANIFESTS/$(basename "$manifest")"
+    done
+}
+
+configure_wsl2_gpu_cdi() {
+    CDI_SPEC="/var/run/cdi/nvidia.yaml"
+    CDI_ETC_DIR="/etc/cdi"
+
+    echo "WSL2 GPU environment detected - generating CDI spec"
+    mkdir -p /var/run/cdi
+    mkdir -p "$CDI_ETC_DIR"
+    nvidia-ctk cdi generate --output="$CDI_SPEC"
+
+    # Some toolkit builds emit cdiVersion 0.3.0 even though containerd rejects
+    # specs older than v0.5.0. Normalize it so CDI devices become resolvable.
+    sed -i -E 's/^cdiVersion:[[:space:]]*.*/cdiVersion: 0.5.0/' "$CDI_SPEC"
+
+    if [ -f /usr/lib/x86_64-linux-gnu/libdxcore.so ]; then
+        tmp_spec=$(mktemp)
+        awk '
+            /^    mounts:$/ && !done {
+                print
+                print "        - hostPath: /usr/lib/x86_64-linux-gnu/libdxcore.so"
+                print "          containerPath: /usr/lib/x86_64-linux-gnu/libdxcore.so"
+                print "          options:"
+                print "            - ro"
+                print "            - nosuid"
+                print "            - nodev"
+                print "            - rbind"
+                print "            - rprivate"
+                done = 1
+                next
+            }
+            { print }
+        ' "$CDI_SPEC" > "$tmp_spec"
+        mv "$tmp_spec" "$CDI_SPEC"
+    fi
+
+    gpu_uuids=$(nvidia-smi --query-gpu=uuid --format=csv,noheader 2>/dev/null || true)
+    if [ -n "$gpu_uuids" ]; then
+        entries_file=$(mktemp)
+        old_ifs=$IFS
+        IFS='
+'
+        gpu_index=0
+        for gpu_uuid in $gpu_uuids; do
+            [ -z "$gpu_uuid" ] && continue
+            if ! grep -Fq "    - name: ${gpu_uuid}" "$CDI_SPEC"; then
+                cat >> "$entries_file" <<EOF
+    - name: ${gpu_uuid}
+      containerEdits:
+        deviceNodes:
+            - path: /dev/dxg
+EOF
+            fi
+            if ! grep -Fq "    - name: ${gpu_index}" "$CDI_SPEC"; then
+                cat >> "$entries_file" <<EOF
+    - name: ${gpu_index}
+      containerEdits:
+        deviceNodes:
+            - path: /dev/dxg
+EOF
+            fi
+            gpu_index=$((gpu_index + 1))
+        done
+        IFS=$old_ifs
+
+        if [ -s "$entries_file" ]; then
+            tmp_spec=$(mktemp)
+            awk -v entries_file="$entries_file" '
+                /^containerEdits:$/ && !done {
+                    while ((getline line < entries_file) > 0) {
+                        print line
+                    }
+                    close(entries_file)
+                    done = 1
+                }
+                { print }
+            ' "$CDI_SPEC" > "$tmp_spec"
+            mv "$tmp_spec" "$CDI_SPEC"
+        fi
+
+        rm -f "$entries_file"
+    fi
+
+    sed -i 's/mode = "auto"/mode = "cdi"/' /etc/nvidia-container-runtime/config.toml
+
+    cp "$CDI_SPEC" "$CDI_ETC_DIR/nvidia.yaml"
+
+    echo "Validating generated CDI devices"
+    nvidia-ctk cdi list
+}
+
+patch_wsl2_plugin_cdi_spec() {
+    CDI_SPEC="/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json"
+    CDI_ETC_DIR="/etc/cdi"
+    attempts=${1:-90}
+    delay_s=${2:-2}
+    i=1
+
+    while [ "$i" -le "$attempts" ]; do
+        if [ -f "$CDI_SPEC" ]; then
+            break
+        fi
+        sleep "$delay_s"
+        i=$((i + 1))
+    done
+
+    if [ ! -f "$CDI_SPEC" ]; then
+        echo "Warning: timed out waiting for plugin CDI spec at $CDI_SPEC"
+        return 1
+    fi
+
+    gpu_count=$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+    if [ -n "$gpu_count" ] && [ "$gpu_count" -gt 0 ] && ! grep -Fq '"name":"0"' "$CDI_SPEC"; then
+        tmp_spec=$(mktemp)
+        index_entries=''
+        gpu_index=0
+        while [ "$gpu_index" -lt "$gpu_count" ]; do
+            index_entries="${index_entries},{\"name\":\"${gpu_index}\",\"containerEdits\":{\"deviceNodes\":[{\"path\":\"/dev/dxg\",\"hostPath\":\"/dev/dxg\"}]}}"
+            gpu_index=$((gpu_index + 1))
+        done
+        INDEX_ENTRIES="$index_entries" perl -0pe 's/("devices":\[\{"name":"all","containerEdits":\{"deviceNodes":\[\{"path":"\/dev\/dxg","hostPath":"\/dev\/dxg"\}\]\}\})(\],"containerEdits":)/$1 . $ENV{INDEX_ENTRIES} . $2/se' "$CDI_SPEC" > "$tmp_spec"
+        mv "$tmp_spec" "$CDI_SPEC"
+    fi
+
+    if [ -f /usr/lib/x86_64-linux-gnu/libdxcore.so ] && ! grep -Fq 'libdxcore.so' "$CDI_SPEC"; then
+        tmp_spec=$(mktemp)
+        perl -0pe 's/"mounts":\[/"mounts":[{"hostPath":"\/usr\/lib\/x86_64-linux-gnu\/libdxcore.so","containerPath":"\/usr\/lib\/x86_64-linux-gnu\/libdxcore.so","options":["ro","nosuid","nodev","rbind","rprivate"]},/' "$CDI_SPEC" > "$tmp_spec"
+        mv "$tmp_spec" "$CDI_SPEC"
+    fi
+
+    tmp_spec=$(mktemp)
+    sed -e 's/"cdiVersion":"[^"]*"/"cdiVersion":"0.5.0"/' "$CDI_SPEC" > "$tmp_spec"
+    mv "$tmp_spec" "$CDI_SPEC"
+
+    mkdir -p "$CDI_ETC_DIR"
+    cp "$CDI_SPEC" "$CDI_ETC_DIR/k8s.device-plugin.nvidia.com-gpu.json"
+
+    echo "Patched plugin-generated WSL2 CDI spec"
+    nvidia-ctk cdi list || true
+}
+
+start_wsl2_plugin_cdi_patch_worker() {
+    (
+        patch_wsl2_plugin_cdi_spec
+    ) &
+}
+
 # Copy bundled Helm chart tarballs to the k3s static charts directory.
 # These are stored in /opt/openshell/charts/ because the volume mount
 # on /var/lib/rancher/k3s overwrites any files baked into that path.
@@ -286,13 +455,12 @@ fi
 # bundled set so k3s does not keep installing removed components.
 K3S_MANIFESTS="/var/lib/rancher/k3s/server/manifests"
 BUNDLED_MANIFESTS="/opt/openshell/manifests"
+GPU_MANIFESTS="/opt/openshell/gpu-manifests"
+WSL2_GPU_MANIFESTS="/opt/openshell/gpu-manifests-wsl2"
 
 if [ -d "$BUNDLED_MANIFESTS" ]; then
     echo "Copying bundled manifests to k3s..."
-    for manifest in "$BUNDLED_MANIFESTS"/*.yaml; do
-        [ ! -f "$manifest" ] && continue
-        cp "$manifest" "$K3S_MANIFESTS/"
-    done
+    copy_manifest_dir "$BUNDLED_MANIFESTS"
 
     # Remove openshell-managed manifests that are no longer bundled.
     # Only clean up files that look like openshell manifests (openshell-* or
@@ -320,13 +488,18 @@ fi
 if [ "${GPU_ENABLED:-}" = "true" ]; then
     echo "GPU support enabled — deploying NVIDIA device plugin"
 
-    GPU_MANIFESTS="/opt/openshell/gpu-manifests"
-    if [ -d "$GPU_MANIFESTS" ]; then
-        for manifest in "$GPU_MANIFESTS"/*.yaml; do
-            [ ! -f "$manifest" ] && continue
-            cp "$manifest" "$K3S_MANIFESTS/"
-        done
+    copy_manifest_dir "$GPU_MANIFESTS"
+
+    if is_wsl2_gpu_environment; then
+        configure_wsl2_gpu_cdi
+        copy_manifest_dir "$WSL2_GPU_MANIFESTS"
+        start_wsl2_plugin_cdi_patch_worker
+    else
+        remove_manifest_dir "$WSL2_GPU_MANIFESTS"
     fi
+else
+    remove_manifest_dir "$GPU_MANIFESTS"
+    remove_manifest_dir "$WSL2_GPU_MANIFESTS"
 fi
 
 # ---------------------------------------------------------------------------

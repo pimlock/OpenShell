@@ -302,9 +302,17 @@ GPU support is part of the single-node gateway bootstrap path rather than a sepa
   - **CDI not enabled**: `--gpus all` device request — `driver="nvidia"`, `count=-1`, which relies on the NVIDIA Container Runtime hook.
 - `deploy/docker/Dockerfile.images` installs NVIDIA Container Toolkit packages in a dedicated Ubuntu stage and copies the runtime binaries, config, and `libnvidia-container` shared libraries into the final Ubuntu-based cluster image.
 - `deploy/docker/cluster-entrypoint.sh` checks `GPU_ENABLED=true` and copies GPU-only manifests from `/opt/openshell/gpu-manifests/` into k3s's manifests directory.
-- `deploy/kube/gpu-manifests/nvidia-device-plugin-helmchart.yaml` installs the NVIDIA device plugin chart, currently pinned to `0.18.2`. NFD and GFD are disabled; the device plugin's default `nodeAffinity` (which requires `feature.node.kubernetes.io/pci-10de.present=true` or `nvidia.com/gpu.present=true` from NFD/GFD) is overridden to empty so the DaemonSet schedules on the single-node cluster without requiring those labels. The chart is configured with `deviceListStrategy: cdi-cri` so the device plugin injects devices via direct CDI device requests in the CRI.
+- On WSL2 (`/dev/dxg` present), the entrypoint also generates a CDI spec in `/var/run/cdi/nvidia.yaml`, upgrades the emitted `cdiVersion` to `0.5.0`, injects `libdxcore.so`, switches `nvidia-container-runtime` to `mode = "cdi"`, copies the generated CDI specs into `/etc/cdi/` for containerd discovery, copies extra WSL2 GPU manifests from `/opt/openshell/gpu-manifests-wsl2/`, and patches the plugin-generated CDI file at `/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json` so index-based device names resolve correctly.
+- `deploy/kube/gpu-manifests/nvidia-device-plugin-helmchart.yaml` installs the NVIDIA device plugin chart, currently pinned to `0.18.2`, with `deviceListStrategy: cdi-cri` so containerd performs CDI injection for GPU workloads.
+- `deploy/kube/gpu-manifests-wsl2/nvidia-device-plugin-helmchart.yaml` overrides the upstream chart on WSL2 to disable the default label-gated affinity, skip NFD/GFD, and use `deviceIDStrategy: index` so CDI allocations request stable numeric IDs instead of UUIDs.
 - k3s auto-detects `nvidia-container-runtime` on `PATH`, registers the `nvidia` containerd runtime, and creates the `nvidia` `RuntimeClass` automatically.
 - The OpenShell Helm chart grants the gateway service account cluster-scoped read access to `node.k8s.io/runtimeclasses` and core `nodes` so GPU sandbox admission can verify both the `nvidia` `RuntimeClass` and allocatable GPU capacity before creating a sandbox.
+
+WSL2-specific note:
+
+- Public NVIDIA documentation and issue reports confirm that WSL2 behaves differently from a standard Linux GPU node: GPU discovery relies on `/dev/dxg`, normal PCI/NFD labeling can fail, and CDI generation on WSL2 may omit `libdxcore.so`.
+- The OpenShell WSL2 HelmChart override and `libdxcore.so` CDI patching follow those upstream constraints directly.
+- The extra patching of `/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json` is currently an OpenShell-specific workaround for nested k3s on WSL2. In this environment, the plugin advertises `nvidia.com/gpu` capacity, but the generated CDI file may still omit the index device names that kubelet later asks containerd to resolve.
 
 The runtime chain is:
 

@@ -124,6 +124,18 @@ If `/readyz` fails, k3s is still starting or has crashed. Check container logs (
 
 If pods are in `CrashLoopBackOff`, `ImagePullBackOff`, or `Pending`, investigate those pods specifically.
 
+For `openshell gateway start --gpu` on WSL2, also check whether the node advertises GPU capacity at all:
+
+```bash
+openshell doctor exec -- kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" capacity="}{.status.capacity.nvidia\.com/gpu}{" allocatable="}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}'
+openshell doctor exec -- kubectl -n nvidia-device-plugin get daemonset nvidia-device-plugin -o wide
+openshell doctor exec -- nvidia-ctk cdi list
+```
+
+On WSL2, OpenShell now generates `/var/run/cdi/nvidia.yaml`, patches in `libdxcore.so`, forces `nvidia-container-runtime` to CDI mode, copies CDI specs into `/etc/cdi/` so containerd picks them up reliably, overrides the NVIDIA device plugin HelmChart values to disable the default label-gated affinity and use `deviceIDStrategy: index`, and patches the plugin-generated CDI file `/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json` so index-based `cdi-cri` allocations resolve correctly. This avoids relying on NFD/GFD labels that nested k3s on WSL2 cannot discover through `/sys/bus/pci`.
+
+This last plugin-CDI patch is an OpenShell-specific workaround for nested k3s on WSL2. Public NVIDIA documentation confirms that WSL2 GPU support differs from standard Linux GPU hosts and that CDI specs on WSL2 can require special handling such as `libdxcore.so`. However, the missing index entries in the plugin-generated `k8s.device-plugin.nvidia.com-gpu.json` file are, at least for now, specific to this nested OpenShell gateway setup.
+
 Also check for node pressure conditions that cause the kubelet to evict pods and reject scheduling:
 
 ```bash
