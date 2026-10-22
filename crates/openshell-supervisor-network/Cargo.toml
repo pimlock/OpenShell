@@ -11,6 +11,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+openshell-supervisor-middleware-builtins = { path = "../openshell-supervisor-middleware-builtins" }
 openshell-sandbox-backend = { path = "../openshell-sandbox-backend" }
 sha2 = { workspace = true }
 openshell-binary-identity = { path = "../openshell-binary-identity" }
@@ -25,9 +26,6 @@ openshell-supervisor-middleware = { path = "../openshell-supervisor-middleware" 
 async-trait = "0.1"
 
 apollo-parser = { workspace = true }
-aws-sigv4 = { version = "1", features = ["sign-http", "http1"] }
-aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
-aws-smithy-runtime-api = { version = "1", features = ["client"] }
 http = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
@@ -70,7 +68,6 @@ openshell-driver-vm = { path = "../openshell-driver-vm", default-features = fals
 openshell-ocsf = { path = "../openshell-ocsf", features = ["test-support"] }
 openshell-ocsf-validate = { path = "../openshell-ocsf-validate" }
 openshell-otel = { path = "../openshell-otel" }
-openshell-supervisor-middleware-builtins = { path = "../openshell-supervisor-middleware-builtins" }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 temp-env = "0.3"
 tokio = { workspace = true, features = ["test-util"] }
