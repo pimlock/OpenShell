@@ -55,3 +55,9 @@ domain event and a detection finding without credential values or placeholders.
 Explicit body and WebSocket
 rewrite flags authorize those locations for ordinary static credentials. SigV4
 signing retains the endpoint-scoped resolver's existing trusted access.
+
+## Request signing
+
+The relay invokes `openshell-supervisor-middleware-builtins::sigv4::SigV4Middleware` after request middleware completes and the supervisor resolves credentials. The built-in signs the final headers and body. AWS secrets remain in the supervisor and never enter the external middleware protocol. Endpoint `credential_signing`, `signing_service`, and `signing_region` select signing; the signer is not an externally registered service or a `network_middlewares` binding.
+
+HTTP hook DUPLEX stages can defer output until they consume the complete input. SigV4 routes withhold that output before upstream delivery, with the existing 10 MiB signing limit. The network crate retains its `sigv4` exports for existing callers; the implementation and AWS signing dependencies belong to the built-ins crate.

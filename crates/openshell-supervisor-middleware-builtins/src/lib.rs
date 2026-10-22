@@ -4,6 +4,7 @@
 //! First-party in-process supervisor middleware implementations.
 
 mod regex;
+pub mod sigv4;
 
 use std::sync::Arc;
 
