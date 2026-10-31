@@ -9,6 +9,8 @@ keywords: "Generative AI, Cybersecurity, AI Agents, AWS, SigV4, Bedrock, S3, Cre
 
 AWS SigV4 credential signing lets sandbox agents call AWS services (Bedrock, S3, STS, and others) through the proxy's CONNECT tunnel. The proxy intercepts outbound requests, strips the sandbox client's placeholder `Authorization` header, and re-signs the request with real AWS credentials from the provider. The sandbox never sees the real credentials.
 
+The trusted built-in `openshell/sigv4` signs requests inside the supervisor after request middleware finishes and credentials are resolved. Keep using the endpoint fields below to select signing; do not add `openshell/sigv4` to `network_middlewares`. External middleware receives no AWS secrets. When HTTP hook middleware changes a body, the signer hashes the final output. These routes hold middleware output before forwarding and cap it at 10 MiB, including `sigv4:no_body` routes with request body middleware.
+
 ## Prerequisites
 
 - A provider with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` credentials configured. Optionally include `AWS_SESSION_TOKEN` for STS temporary credentials.

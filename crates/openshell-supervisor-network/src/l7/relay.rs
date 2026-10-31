@@ -12279,6 +12279,8 @@ network_policies:
 
     #[tokio::test]
     async fn sigv4_route_withholds_stream_output_up_to_the_signing_limit() {
+        use sha2::{Digest as _, Sha256};
+
         let data = r#"
 network_middlewares:
   echo:
@@ -12308,13 +12310,14 @@ network_policies:
         // A pass-through DUPLEX stage keeps the route's 10 MiB signing limit
         // instead of the 4 MiB default: a 6 MiB body is signed and forwarded,
         // and one byte over the limit fails before upstream contact.
-        for body_len in [6 * 1024 * 1024, limit + 1] {
+        for (body_len, drop_body) in [(6 * 1024 * 1024, false), (limit + 1, false), (1024, true)] {
+            let output_len = if drop_body { 0 } else { body_len };
             let forwards = body_len <= limit;
             let engine = OpaEngine::from_strings(TEST_POLICY, data).expect("test policy");
             let preflights = Arc::default();
             engine.set_middleware_runner_for_tests(
                 openshell_supervisor_middleware::ChainRunner::new(Arc::new(HookEchoRequestStage {
-                    drop_body: false,
+                    drop_body,
                     reject: false,
                     preflights: Arc::clone(&preflights),
                 })),
@@ -12400,7 +12403,7 @@ network_policies:
                 while forwarded
                     .windows(4)
                     .position(|window| window == b"\r\n\r\n")
-                    .is_none_or(|end| forwarded.len() < end + 4 + body_len)
+                    .is_none_or(|end| forwarded.len() < end + 4 + output_len)
                 {
                     let count = upstream.read(&mut buffer).await.unwrap();
                     assert!(count > 0, "upstream closed early");
@@ -12440,6 +12443,9 @@ network_policies:
                 Some(limit as u64),
                 "{body_len}"
             );
+            let visible = format!("{:?}", preflights[0]);
+            assert!(!visible.contains("AKIATESTKEY"));
+            assert!(!visible.contains("test-secret-key"));
             let response = String::from_utf8_lossy(&response);
             if forwards {
                 let end = forwarded
@@ -12449,10 +12455,16 @@ network_policies:
                 let head = String::from_utf8_lossy(&forwarded[..end]).to_ascii_lowercase();
                 assert!(head.contains("authorization: aws4-hmac-sha256"), "{head}");
                 assert!(
-                    head.contains(&format!("content-length: {body_len}")),
+                    head.contains(&format!("content-length: {output_len}")),
                     "{head}"
                 );
-                assert_eq!(forwarded.len() - end - 4, body_len);
+                assert_eq!(forwarded.len() - end - 4, output_len);
+                let digest = hex::encode(Sha256::digest(&forwarded[end + 4..]));
+                assert!(
+                    head.contains(&format!("x-amz-content-sha256: {digest}")),
+                    "{head}"
+                );
+                assert!(head.contains("credential=akiatestkey/"), "{head}");
                 assert!(response.starts_with("HTTP/1.1 200"), "{response}");
             } else {
                 assert!(forwarded.is_empty(), "upstream saw an over-limit request");

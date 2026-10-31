@@ -5253,6 +5253,9 @@ name = "openshell-supervisor-middleware-builtins"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
  "miette",
  "openshell-core",
  "prost-types",
@@ -5270,9 +5273,6 @@ version = "0.0.0"
 dependencies = [
  "apollo-parser",
  "async-trait",
- "aws-credential-types",
- "aws-sigv4",
- "aws-smithy-runtime-api",
  "base64 0.22.1",
  "bytes",
  "flate2",

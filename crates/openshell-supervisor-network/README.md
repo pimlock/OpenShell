@@ -45,3 +45,9 @@ at debug, and emits no OCSF denial event: a standard OpenTelemetry SDK retries
 for the life of the agent, and one event per retry would flood the OCSF log.
 The supervisor installs its OTLP relay receiver as the handler while the agent
 trace relay is active.
+
+## Request signing
+
+The relay invokes `openshell-supervisor-middleware-builtins::sigv4::SigV4Middleware` after request middleware completes and the supervisor resolves credentials. The built-in signs the final headers and body. AWS secrets remain in the supervisor and never enter the external middleware protocol. Endpoint `credential_signing`, `signing_service`, and `signing_region` select signing; the signer is not an externally registered service or a `network_middlewares` binding.
+
+HTTP hook DUPLEX stages can defer output until they consume the complete input. SigV4 routes withhold that output before upstream delivery, with the existing 10 MiB signing limit. The network crate retains its `sigv4` exports for existing callers; the implementation and AWS signing dependencies belong to the built-ins crate.
