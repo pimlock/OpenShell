@@ -7,7 +7,7 @@ use crate::builders::ContextRef;
 use crate::enums::{ActionId, ActivityId, DispositionId, SeverityId, StatusId};
 use crate::events::base_event::BaseEventData;
 use crate::events::{NetworkActivityEvent, OcsfEvent};
-use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule};
+use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule, TrafficReport};
 
 /// Builder for Network Activity [4001] events.
 pub struct NetworkActivityBuilder<'a, EndpointState = MissingNetworkEndpoint> {
@@ -28,6 +28,7 @@ pub struct NetworkActivityBuilder<'a, EndpointState = MissingNetworkEndpoint> {
     status_detail: Option<String>,
     unmapped: Option<serde_json::Map<String, serde_json::Value>>,
     log_source: Option<String>,
+    traffic: TrafficReport,
     endpoint_state: std::marker::PhantomData<EndpointState>,
 }
 
@@ -68,6 +69,7 @@ impl<'a> NetworkActivityBuilder<'a, MissingNetworkEndpoint> {
             status_detail: None,
             unmapped: None,
             log_source: None,
+            traffic: TrafficReport::default(),
             endpoint_state: std::marker::PhantomData,
         }
     }
@@ -127,6 +129,7 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
             status_detail: self.status_detail,
             unmapped: self.unmapped,
             log_source: self.log_source,
+            traffic: self.traffic,
             endpoint_state: std::marker::PhantomData,
         }
     }
@@ -153,6 +156,7 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
             status_detail: self.status_detail,
             unmapped: self.unmapped,
             log_source: self.log_source,
+            traffic: self.traffic,
             endpoint_state: std::marker::PhantomData,
         }
     }
@@ -195,6 +199,35 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
     #[must_use]
     pub fn actor_process(mut self, process: crate::objects::Process) -> Self {
         self.actor = Some(Actor::process(process));
+        self
+    }
+
+    /// Bytes moved in this event's window.
+    #[must_use]
+    pub fn traffic(mut self, traffic: crate::objects::NetworkTraffic) -> Self {
+        self.traffic.traffic = Some(traffic);
+        self
+    }
+
+    /// Bytes moved over the life of the connection.
+    #[must_use]
+    pub fn cumulative_traffic(mut self, traffic: crate::objects::NetworkTraffic) -> Self {
+        self.traffic.cumulative_traffic = Some(traffic);
+        self
+    }
+
+    /// Window covered by this event, milliseconds since epoch.
+    #[must_use]
+    pub fn time_window(mut self, start_ms: i64, end_ms: i64) -> Self {
+        self.traffic.start_time = Some(start_ms);
+        self.traffic.end_time = Some(end_ms);
+        self
+    }
+
+    /// Connection duration in milliseconds.
+    #[must_use]
+    pub fn duration_ms(mut self, duration_ms: i64) -> Self {
+        self.traffic.duration = Some(duration_ms);
         self
     }
 
@@ -255,6 +288,7 @@ impl NetworkActivityBuilder<'_, HasNetworkEndpoint> {
             disposition: self.disposition,
             observation_point_id: self.observation_point_id,
             is_src_dst_assignment_known: Some(true),
+            traffic: self.traffic,
         })
     }
 }

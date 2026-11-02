@@ -110,6 +110,10 @@ impl<S: Subscriber> Layer<S> for LogPushLayer {
 
 fn push_event(sink: &LogSink, event: &Event<'_>) {
     let meta = event.metadata();
+    // Traffic accounting events go to structured sinks only.
+    if meta.target() == openshell_ocsf::OCSF_TRAFFIC_TARGET {
+        return;
+    }
     // OCSF events carry their payload in a thread-local; extract the
     // shorthand representation for the push message. Non-OCSF events
     // use the original visitor-based extraction.

@@ -17,6 +17,7 @@ mod metadata;
 mod process;
 mod resource;
 mod service;
+mod traffic;
 mod user;
 
 pub use ai_model::AiModel;
@@ -33,4 +34,5 @@ pub use metadata::{Metadata, Product};
 pub use process::{Actor, Process};
 pub use resource::ResourceDetails;
 pub use service::Service;
+pub use traffic::{NetworkTraffic, TrafficReport};
 pub use user::User;
