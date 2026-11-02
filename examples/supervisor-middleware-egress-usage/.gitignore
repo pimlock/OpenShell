@@ -1,0 +1,2 @@
+# Spike: no tracked lockfile, so the PR diff stays comparable.
+Cargo.lock
