@@ -1,0 +1,110 @@
+{
+  "uid": "openshell-egress",
+  "title": "OpenShell egress (spike 01b)",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "bytes_in/s by sandbox and policy key",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (openshell_sandbox_id, openshell_policy) (rate(openshell_egress_bytes_in[1m]))",
+          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "bytes_out/s by sandbox and policy key",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (openshell_sandbox_id, openshell_policy) (rate(openshell_egress_bytes_out[1m]))",
+          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "bytes_in, last 5 min, by sandbox and policy key",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (openshell_sandbox_id, openshell_policy) (increase(openshell_egress_bytes_in[5m]))",
+          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "OCSF Traffic and Close events",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\""
+        }
+      ]
+    }
+  ]
+}

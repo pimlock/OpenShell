@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+processors:
+  batch:
+    timeout: 200ms
+  # Label metrics with the sandbox: signaltometrics reads record attributes.
+  transform/sandbox:
+    error_mode: ignore
+    log_statements:
+      - set(log.attributes["openshell.sandbox.id"], resource.attributes["openshell.sandbox.id"])
+  # Prometheus accepts only cumulative series; signaltometrics emits deltas.
+  deltatocumulative: {}
+  # Only OCSF traffic accounting records go to the detector.
+  filter/traffic:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'attributes["ocsf.class_uid"] != 4001 and attributes["ocsf.class_uid"] != 4002'
+
+connectors:
+  # Derive egress byte counters from the promoted OCSF attributes so
+  # Prometheus can aggregate without parsing the JSON body.
+  signaltometrics:
+    logs:
+      - name: openshell.egress.bytes_in
+        description: Bytes received from upstreams, from OCSF Traffic and Close events.
+        conditions:
+          - 'attributes["ocsf.traffic.bytes_in"] != nil'
+        attributes:
+          - key: openshell.sandbox.id
+          - key: openshell.policy
+          - key: destination.address
+        sum:
+          value: Int(attributes["ocsf.traffic.bytes_in"])
+      - name: openshell.egress.bytes_out
+        description: Bytes sent to upstreams, from OCSF Traffic and Close events.
+        conditions:
+          - 'attributes["ocsf.traffic.bytes_out"] != nil'
+        attributes:
+          - key: openshell.sandbox.id
+          - key: openshell.policy
+          - key: destination.address
+        sum:
+          value: Int(attributes["ocsf.traffic.bytes_out"])
+
+exporters:
+  otlp/detector:
+    endpoint: 127.0.0.1:14317
+    tls:
+      insecure: true
+    sending_queue:
+      queue_size: 10000
+  otlp/lgtm:
+    endpoint: 127.0.0.1:24317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs/detector:
+      receivers: [otlp]
+      processors: [filter/traffic, batch]
+      exporters: [otlp/detector]
+    logs/lgtm:
+      receivers: [otlp]
+      processors: [transform/sandbox, batch]
+      exporters: [otlp/lgtm, signaltometrics]
+    metrics/lgtm:
+      receivers: [signaltometrics]
+      processors: [deltatocumulative, batch]
+      exporters: [otlp/lgtm]
+    traces/lgtm:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/lgtm]
