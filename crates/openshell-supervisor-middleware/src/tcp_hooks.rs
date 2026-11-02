@@ -522,7 +522,21 @@ async fn run_stage(
         }
     };
     let _ = tx.send(end_event(&meter, reason)).await;
+    // Dropping the response stream cancels the RPC, which can discard the
+    // queued end before it is flushed. Half-close the request side and let
+    // the stage finish its responses, so short connections that end before
+    // their first stats tick still report their totals.
+    drop(tx);
+    if results_open {
+        let _ = tokio::time::timeout(TCP_END_DRAIN_TIMEOUT, async {
+            while let Some(Ok(_)) = results.next().await {}
+        })
+        .await;
+    }
 }
+
+/// How long a stage may take to finish its response stream after the end.
+const TCP_END_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn close_connection(
     middleware: &str,

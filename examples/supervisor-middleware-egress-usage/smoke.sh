@@ -327,6 +327,22 @@ run_suite() {
   out="$(http_get http://host.openshell.internal:47081/bytes/1000000 2>&1)" || fail "control host after trip: $out"
   printf 'PASS control key other_svc still allowed (%s)\n' "$out"
 
+  # Split transfer in a fresh sandbox: each connection ends before its first
+  # stats tick, so only the end totals count toward the window.
+  "${CLI[@]}" sandbox delete "$SANDBOX_NAME" >>"$SETUP_LOG" 2>&1 || true
+  SANDBOX_NAME="${SANDBOX_NAME}b"
+  create_sandbox
+  local count denied=0
+  for count in $(seq 1 40); do
+    out="$(raw_get host.openshell.internal 47900 1000000 2>&1)" || true
+    if [[ "$out" == *"received=0"* ]]; then
+      denied="$count"
+      break
+    fi
+  done
+  [[ "$denied" -gt 0 ]] || fail "split transfer of 40 x 1MB raw TCP connections was not stopped"
+  printf 'PASS split transfer denied at connection %s (%s MB through)\n' "$denied" "$((denied - 1))"
+
   grep -E 'TRIP|deny' "$MIDDLEWARE_LOG" || true
   echo "ALL PASS egress-usage smoke"
 }
