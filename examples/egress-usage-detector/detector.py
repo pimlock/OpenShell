@@ -21,7 +21,8 @@ Reactions (``--reaction``):
 - ``stop``: ``openshell sandbox stop <sandbox>``.
 - ``deny``: D2 removes the policy key (``policy update --remove-rule``),
   which also cuts in-flight relays because the policy generation changes.
-  D1 appends a PUT deny rule to the policy key for every writer.
+  D1 appends a PUT deny rule to the policy key for every writer, restating
+  the rule's binaries as the CLI requires.
 """
 
 from __future__ import annotations
@@ -178,16 +179,14 @@ class Detector:
                     "policy", "update", sandbox,
                     "--add-deny", f"{target}:PUT:/**",
                     "--rule-name", policy,
-                    "--any-binary",
                 ]
+                + self.binary_scope(cli, sandbox, policy)
             ]
         if self.args.dry_run:
             for command in commands:
                 log(f"DRY RUN {' '.join(command)}")
             return
-        env = dict(os.environ)
-        if self.args.workspace:
-            env["OPENSHELL_WORKSPACE"] = self.args.workspace
+        env = self.cli_env()
         for command in commands:
             result = subprocess.run(command, capture_output=True, text=True, env=env)
             done = time.time()
@@ -199,6 +198,34 @@ class Detector:
             )
             if result.returncode != 0:
                 log(f"  stderr: {result.stderr.strip()}")
+
+
+    def binary_scope(self, cli: list[str], sandbox: str, policy: str) -> list[str]:
+        """CLI flags naming the rule's complete binary list.
+
+        An L7 append must restate the target rule's binaries exactly, so read
+        them from the sandbox's base policy. A rule without binaries allows
+        any binary.
+        """
+        result = subprocess.run(
+            cli + ["policy", "get", sandbox, "--base", "-o", "json"],
+            capture_output=True, text=True, env=self.cli_env(),
+        )
+        try:
+            rule = json.loads(result.stdout)["policy"]["network_policies"][policy]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            log(f"  could not read binaries of {sandbox}/{policy}: {result.stderr.strip()}")
+            return ["--any-binary"]
+        paths = [binary["path"] for binary in rule.get("binaries", []) if binary.get("path")]
+        if not paths:
+            return ["--any-binary"]
+        return [flag for path in paths for flag in ("--binary", path)]
+
+    def cli_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self.args.workspace:
+            env["OPENSHELL_WORKSPACE"] = self.args.workspace
+        return env
 
 
 def sandbox_name(event: dict) -> str:
