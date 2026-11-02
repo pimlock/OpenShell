@@ -3379,6 +3379,7 @@ network_policies:
     }
 
     #[test]
+    #[ignore = "spike 02b: tls: skip conflict moved to gateway validation"]
     fn validate_rejects_middleware_selector_matching_tls_skip_endpoint() {
         let mut policy = restrictive_default_policy();
         add_middleware(
@@ -3436,6 +3437,7 @@ network_policies:
     }
 
     #[test]
+    #[ignore = "spike 02b: tls: skip conflict moved to gateway validation"]
     fn validate_rejects_explicit_fail_closed_middleware_on_tls_skip_endpoint() {
         let mut policy = restrictive_default_policy();
         let mut middleware = middleware_config("openshell/regex");
@@ -3464,6 +3466,7 @@ network_policies:
     }
 
     #[test]
+    #[ignore = "spike 02b: tls: skip conflict moved to gateway validation"]
     fn validate_rejects_concrete_selector_overlapping_tls_skip_wildcard() {
         let mut policy = restrictive_default_policy();
         let mut middleware = middleware_config("openshell/regex");

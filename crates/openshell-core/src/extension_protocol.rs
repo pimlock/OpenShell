@@ -37,6 +37,14 @@ pub const COMPUTE_UPDATE_SANDBOX_CONFIGURATION: &str =
 /// `Describe` instead of calling the deprecated legacy HTTP hooks.
 pub const SUPERVISOR_MIDDLEWARE_HTTP_HOOKS: &str = "openshell.supervisor-middleware.http-hooks";
 
+/// Capability for supervisor middleware that implements TCP connection hooks
+/// (`TcpHooks.EvaluateConnection`).
+///
+/// A service with a `TCP_CONNECTION` binding must list this capability in
+/// `required_capabilities`, so peers without TCP hooks reject it at
+/// `Describe`.
+pub const SUPERVISOR_MIDDLEWARE_TCP_HOOKS: &str = "openshell.supervisor-middleware.tcp-hooks";
+
 const MAX_IMPLEMENTATION_NAME_BYTES: usize = 128;
 const MAX_IMPLEMENTATION_VERSION_BYTES: usize = 128;
 const MAX_CAPABILITY_BYTES: usize = 128;
@@ -145,6 +153,7 @@ pub fn gateway_metadata(family: ExtensionFamily) -> PeerMetadata {
         }
         ExtensionFamily::SupervisorMiddleware => {
             supported_capabilities.push(SUPERVISOR_MIDDLEWARE_HTTP_HOOKS.to_string());
+            supported_capabilities.push(SUPERVISOR_MIDDLEWARE_TCP_HOOKS.to_string());
         }
         ExtensionFamily::Credentials | ExtensionFamily::GatewayInterceptor => {}
     }
@@ -208,6 +217,28 @@ pub fn http_hooks_middleware_metadata(
     metadata
         .required_capabilities
         .push(SUPERVISOR_MIDDLEWARE_HTTP_HOOKS.to_string());
+    metadata
+}
+
+/// Extension metadata for supervisor middleware that implements TCP
+/// connection hooks.
+///
+/// It supports and requires [`SUPERVISOR_MIDDLEWARE_TCP_HOOKS`], so peers
+/// without TCP hooks reject the service at `Describe`.
+#[must_use]
+pub fn tcp_hooks_middleware_metadata(
+    implementation_name: impl Into<String>,
+    implementation_version: impl Into<String>,
+) -> PeerMetadata {
+    let mut metadata = extension_metadata(
+        ExtensionFamily::SupervisorMiddleware,
+        implementation_name,
+        implementation_version,
+        [SUPERVISOR_MIDDLEWARE_TCP_HOOKS.to_string()],
+    );
+    metadata
+        .required_capabilities
+        .push(SUPERVISOR_MIDDLEWARE_TCP_HOOKS.to_string());
     metadata
 }
 

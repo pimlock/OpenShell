@@ -13,7 +13,8 @@ pub async fn validate_policy(
 ) -> Result<(), Status> {
     async {
         registry.validate_policy_configs(policy).await?;
-        registry.validate_http_hook_rules(policy).await
+        registry.validate_http_hook_rules(policy).await?;
+        registry.validate_tcp_hook_rules(policy).await
     }
     .await
     .map_err(|error| {

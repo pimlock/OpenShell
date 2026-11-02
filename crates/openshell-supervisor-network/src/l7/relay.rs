@@ -1255,7 +1255,10 @@ where
             // The SQL relay is not implemented, so a matching middleware
             // chain can never inspect this stream: gate it like any other
             // uninspectable protocol.
-            let chain = engine.query_middleware_chain(&middleware_network_input(ctx))?;
+            let chain = crate::l7::middleware::inspecting_entries(
+                engine.middleware_runner(),
+                engine.query_middleware_chain(&middleware_network_input(ctx))?,
+            );
             match uninspectable_traffic_gate(&chain) {
                 UninspectableTrafficGate::Deny => {
                     emit_middleware_uninspectable(ctx, "sql passthrough", true);

@@ -4,15 +4,17 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use openshell_core::middleware::{
     HttpRequestHookResultStream, HttpRequestView, HttpResponseHookResultStream,
-    HttpResponseResultStream, SupervisorMiddlewareEndpoint, WebSocketResponseStream,
+    HttpResponseResultStream, SupervisorMiddlewareEndpoint, TcpHookResultStream,
+    WebSocketResponseStream,
 };
 use openshell_core::proto::middleware::v1::http_hooks_client::HttpHooksClient;
 use openshell_core::proto::middleware::v1::http_response_pre_return_client::HttpResponsePreReturnClient;
 use openshell_core::proto::middleware::v1::supervisor_middleware_client::SupervisorMiddlewareClient;
+use openshell_core::proto::middleware::v1::tcp_hooks_client::TcpHooksClient;
 use openshell_core::proto::{
     HttpRequestEvaluation, HttpRequestHookEvent, HttpRequestResult, HttpResponseEvent,
-    HttpResponseHookEvent, MiddlewareDescribeRequest, MiddlewareManifest, ValidateConfigRequest,
-    ValidateConfigResponse, WebSocketSessionEvent,
+    HttpResponseHookEvent, MiddlewareDescribeRequest, MiddlewareManifest, TcpHookEvent,
+    ValidateConfigRequest, ValidateConfigResponse, WebSocketSessionEvent,
 };
 use openshell_extension_core::{
     BearerTokenInterceptor, BearerTokenSlot, ExtensionChannelConfig, ExtensionServerTrust,
@@ -137,6 +139,14 @@ impl GrpcMiddlewareService {
     ) -> std::result::Result<HttpResponseHookResultStream, Status> {
         self.service.open_http_response_hook(receiver).await
     }
+
+    /// Open a remote TCP connection hook exchange through the gRPC adapter.
+    pub async fn open_tcp_connection_hook(
+        &self,
+        receiver: tokio::sync::mpsc::Receiver<TcpHookEvent>,
+    ) -> std::result::Result<TcpHookResultStream, Status> {
+        self.service.open_tcp_connection_hook(receiver).await
+    }
 }
 
 #[derive(Clone)]
@@ -144,6 +154,7 @@ pub struct RemoteMiddlewareService {
     client: SupervisorMiddlewareClient<ExtensionChannel>,
     response_client: HttpResponsePreReturnClient<ExtensionChannel>,
     http_hooks_client: HttpHooksClient<ExtensionChannel>,
+    tcp_hooks_client: TcpHooksClient<ExtensionChannel>,
 }
 
 impl RemoteMiddlewareService {
@@ -177,7 +188,10 @@ impl RemoteMiddlewareService {
             response_client: HttpResponsePreReturnClient::new(channel.clone())
                 .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
-            http_hooks_client: HttpHooksClient::new(channel)
+            http_hooks_client: HttpHooksClient::new(channel.clone())
+                .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
+            tcp_hooks_client: TcpHooksClient::new(channel)
                 .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
         })
@@ -263,6 +277,20 @@ impl SupervisorMiddlewareEndpoint for RemoteMiddlewareService {
         let mut client = self.http_hooks_client.clone();
         let responses = client
             .evaluate_response(Request::new(tokio_stream::wrappers::ReceiverStream::new(
+                receiver,
+            )))
+            .await?
+            .into_inner();
+        Ok(Box::pin(responses))
+    }
+
+    async fn open_tcp_connection_hook(
+        &self,
+        receiver: tokio::sync::mpsc::Receiver<TcpHookEvent>,
+    ) -> std::result::Result<TcpHookResultStream, Status> {
+        let mut client = self.tcp_hooks_client.clone();
+        let responses = client
+            .evaluate_connection(Request::new(tokio_stream::wrappers::ReceiverStream::new(
                 receiver,
             )))
             .await?

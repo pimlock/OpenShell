@@ -12420,44 +12420,8 @@ network_middlewares:
 "#,
                 "invalid middleware configuration",
             ),
-            (
-                "tls skip selector",
-                r#"
-network_middlewares:
-  redactor:
-    middleware: openshell/regex
-    endpoints:
-      include: ["api.example.com"]
-network_policies:
-  api:
-    endpoints:
-      - host: api.example.com
-        port: 443
-        tls: skip
-    binaries:
-      - { path: /usr/bin/curl }
-"#,
-                "middleware conflicts with TLS inspection",
-            ),
-            (
-                "tls skip wildcard overlap",
-                r#"
-network_middlewares:
-  redactor:
-    middleware: openshell/regex
-    endpoints:
-      include: ["api.example.com"]
-network_policies:
-  api:
-    endpoints:
-      - host: "*.example.com"
-        port: 443
-        tls: skip
-    binaries:
-      - { path: /usr/bin/curl }
-"#,
-                "middleware conflicts with TLS inspection",
-            ),
+            // Spike 02b: the tls: skip conflict moved to the gateway's
+            // registry-aware validation (validate_tcp_hook_rules).
         ];
 
         for (name, data, expected) in cases {
