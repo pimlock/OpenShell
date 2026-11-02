@@ -51,6 +51,9 @@ version = 2
 name = "${GATEWAY_NAME}"
 compute_driver = "docker"
 disable_tls = true
+# Push policy updates over the supervisor session so deny reactions take
+# effect in about a second instead of at the next settings poll.
+config_delivery_mode = "${OPENSHELL_CONFIG_DELIVERY_MODE:-push}"
 
 [openshell.gateway.auth]
 allow_unauthenticated_users = true
