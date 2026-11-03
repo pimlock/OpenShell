@@ -398,47 +398,10 @@ fn log_record(
     {
         record.add_attribute("openshell.sandbox.id", sandbox_id);
     }
-    promote_network_attributes(&mut record, event);
 
     let body = serde_json::to_string(event)?;
     record.set_body(AnyValue::String(body.into()));
     Ok(record)
-}
-
-/// Promote the fields a collector needs to aggregate egress volume without
-/// parsing the JSON body: destination, policy key, connection, and bytes.
-fn promote_network_attributes(record: &mut SdkLogRecord, event: &OcsfEvent) {
-    let OcsfEvent::NetworkActivity(network) = event else {
-        return;
-    };
-    if let Some(dst) = &network.dst_endpoint {
-        if let Some(host) = dst.domain.clone().or_else(|| dst.ip.clone()) {
-            record.add_attribute("destination.address", host);
-        }
-        if let Some(port) = dst.port {
-            record.add_attribute("destination.port", i64::from(port));
-        }
-    }
-    if let Some(rule) = &network.firewall_rule {
-        record.add_attribute("openshell.policy", rule.name.clone());
-    }
-    if let Some(uid) = network
-        .connection_info
-        .as_ref()
-        .and_then(|info| info.uid.clone())
-    {
-        record.add_attribute("ocsf.connection_info.uid", uid);
-    }
-    if let Some(traffic) = network.traffic.traffic {
-        record.add_attribute(
-            "ocsf.traffic.bytes_in",
-            i64::try_from(traffic.bytes_in).unwrap_or(i64::MAX),
-        );
-        record.add_attribute(
-            "ocsf.traffic.bytes_out",
-            i64::try_from(traffic.bytes_out).unwrap_or(i64::MAX),
-        );
-    }
 }
 
 /// Map an OCSF severity onto an OTLP severity.
