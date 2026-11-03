@@ -4,7 +4,8 @@
 # pkg_proxy stands in for artifactory.internal. Docker sandboxes reach the
 # host-run upstream only through host.openshell.internal, so the two policy
 # keys are told apart by port. The middleware groups usage by sandbox and
-# policy key.
+# policy key, and reads its limits from config below: change the policy to
+# change the budget.
 
 version: 1
 
@@ -13,6 +14,19 @@ network_middlewares:
     name: Egress usage
     middleware: egress-usage-example
     order: 10
+    config:
+      # Per sandbox and policy key.
+      max_bytes: 20MB
+      window: 60s
+      # How often OpenShell reports byte totals (1s to 60s). Bytes over the
+      # budget before a cut are roughly rate x interval.
+      interval: 1s
+      block_for: 120s
+      direction: both
+      # Overrides for one network policy key.
+      policies:
+        other_svc:
+          max_bytes: 50MB
     on_error: fail_closed
     endpoints:
       include:

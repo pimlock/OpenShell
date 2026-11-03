@@ -15,7 +15,7 @@ usage: $0 [--test-suite|--test|--print-config]
 
 Without flags, starts a local Docker-driver gateway, the egress-usage TCP
 middleware, and a package proxy stand-in, creates an example sandbox, and keeps
-the stack running.
+the stack running. Limits come from the config in policy.yaml.
 
 Options:
   --test-suite, --test  Run the burst scenarios, then stop.
@@ -24,10 +24,6 @@ Options:
 Environment:
   EGRESS_USAGE_SMOKE_HOST        Non-loopback host address reachable from
                                  supervisor containers.
-  EGRESS_USAGE_MAX_BYTES         Default 20MB.
-  EGRESS_USAGE_WINDOW            Default 60s.
-  EGRESS_USAGE_INTERVAL          Default 1s.
-  EGRESS_USAGE_BLOCK_FOR         Default 120s.
   EGRESS_USAGE_SUPERVISOR_IMAGE  Use a prebuilt supervisor image and skip the
                                  gateway, CLI, and image builds.
 USAGE
@@ -66,10 +62,6 @@ RUN_ID="egress-usage-smoke-$$-$RANDOM"
 SUPERVISOR_IMAGE="${EGRESS_USAGE_SUPERVISOR_IMAGE:-localhost/openshell-egress-usage/supervisor:$RUN_ID}"
 SANDBOX_NAME="eu-$$-$RANDOM"
 SANDBOX_CREATED=0
-MAX_BYTES="${EGRESS_USAGE_MAX_BYTES:-20MB}"
-WINDOW="${EGRESS_USAGE_WINDOW:-60s}"
-INTERVAL="${EGRESS_USAGE_INTERVAL:-1s}"
-BLOCK_FOR="${EGRESS_USAGE_BLOCK_FOR:-120s}"
 # The scenarios need curl and python3 in the sandbox.
 SANDBOX_IMAGE="${EGRESS_USAGE_SANDBOX_IMAGE:-ghcr.io/nvidia/openshell-community/sandboxes/base:latest}"
 
@@ -221,7 +213,6 @@ start_middleware() {
   printf 'INFO starting egress-usage service at %s:%s\n' "$SERVICE_HOST" "$MIDDLEWARE_PORT"
   "$MIDDLEWARE_BIN" \
     --bind "0.0.0.0:$MIDDLEWARE_PORT" \
-    --max-bytes "$MAX_BYTES" --window "$WINDOW" --interval "$INTERVAL" --block-for "$BLOCK_FOR" \
     >"$MIDDLEWARE_LOG" 2>&1 &
   MIDDLEWARE_PID=$!
   for _ in {1..60}; do
@@ -307,7 +298,7 @@ run_suite() {
   out="$(http_get http://host.openshell.internal:47081/bytes/1000000 2>&1)" || fail "control host: $out"
   printf 'PASS control key other_svc (%s)\n' "$out"
 
-  printf 'INFO D2 burst: 200MB over tls: skip at 10MB/s, threshold %s per %s\n' "$MAX_BYTES" "$WINDOW"
+  printf 'INFO D2 burst: 200MB over tls: skip at 10MB/s, policy budget 20MB per 60s\n'
   started=$(date +%s.%N)
   out="$(http_get -k --limit-rate 10M https://host.openshell.internal:47443/bytes/200000000 2>&1)" && fail "D2 burst was not cut: $out"
   elapsed=$(echo "$(date +%s.%N) - $started" | bc)
@@ -343,6 +334,24 @@ run_suite() {
   [[ "$denied" -gt 0 ]] || fail "split transfer of 40 x 1MB raw TCP connections was not stopped"
   printf 'PASS split transfer denied at connection %s (%s MB through)\n' "$denied" "$((denied - 1))"
 
+  # The budget lives in the policy: changing the policy changes it.
+  sed 's/max_bytes: 20MB/max_bytes: lots/' "$EXAMPLE_DIR/policy.yaml" >"$SMOKE_TMP_DIR/invalid.yaml"
+  out="$("${CLI[@]}" policy set "$SANDBOX_NAME" --policy "$SMOKE_TMP_DIR/invalid.yaml" 2>&1)" \
+    && fail "invalid budget was accepted: $out"
+  [[ "$out" == *"invalid byte size"* ]] || fail "invalid budget rejection: $out"
+  printf 'PASS invalid budget rejected by ValidateConfig (%s)\n' "$(echo "$out" | grep -m1 'invalid byte size')"
+
+  out="$(http_get --limit-rate 10M http://host.openshell.internal:47081/bytes/15000000 2>&1)" \
+    || fail "15MB on other_svc under its 50MB budget: $out"
+  printf 'PASS 15MB on other_svc under its 50MB policy budget (%s)\n' "$out"
+
+  sed 's/max_bytes: 50MB/max_bytes: 10MB/' "$EXAMPLE_DIR/policy.yaml" >"$SMOKE_TMP_DIR/tight.yaml"
+  run_setup_step "lowering the other_svc budget to 10MB in the policy" \
+    "${CLI[@]}" policy set "$SANDBOX_NAME" --policy "$SMOKE_TMP_DIR/tight.yaml" --wait
+  out="$(http_get --limit-rate 10M http://host.openshell.internal:47081/bytes/15000000 2>&1)" \
+    && fail "15MB on other_svc was not cut after lowering its budget: $out"
+  printf 'PASS same 15MB on other_svc cut after the policy lowered its budget to 10MB (%s)\n' "$(echo "$out" | tr '\n' ' ')"
+
   grep -E 'TRIP|deny' "$MIDDLEWARE_LOG" || true
   echo "ALL PASS egress-usage smoke"
 }
@@ -357,8 +366,12 @@ Middleware endpoint: http://$SERVICE_HOST:$MIDDLEWARE_PORT
 Sandbox:             $SANDBOX_NAME
 Gateway config:      $GATEWAY_CONFIG
 Middleware log:      $MIDDLEWARE_LOG
+Policy:              $EXAMPLE_DIR/policy.yaml
 
-Burst over tls: skip (cut at $MAX_BYTES per $WINDOW):
+Change the budget by editing the policy's config and applying it:
+  ${CLI[*]} policy set $SANDBOX_NAME --policy <edited policy.yaml> --wait
+
+Burst over tls: skip (cut at the policy budget, 20MB per 60s):
   ${CLI[*]} sandbox exec --name $SANDBOX_NAME --no-tty -- curl -k --limit-rate 10M -o /dev/null https://host.openshell.internal:47443/bytes/200000000
 
 Press Ctrl-C to clean up.

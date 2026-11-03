@@ -19,6 +19,8 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
+use crate::config::Config;
+
 /// Reason code sent with every close and deny.
 pub const REASON_CODE: &str = "egress_budget_exceeded";
 
@@ -32,7 +34,7 @@ pub enum Direction {
     Out,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub max_bytes: u64,
     pub window: Duration,
@@ -78,7 +80,8 @@ struct State {
 
 #[derive(Clone)]
 pub struct Usage {
-    limits: Limits,
+    /// Flag values, used where the policy config leaves a field unset.
+    defaults: Limits,
     state: Arc<Mutex<State>>,
     next_id: Arc<AtomicU64>,
 }
@@ -110,22 +113,29 @@ fn key_of(preflight: &TcpPreflight) -> Key {
 }
 
 impl Usage {
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(defaults: Limits) -> Self {
         Self {
-            limits,
+            defaults,
             state: Arc::default(),
             next_id: Arc::default(),
         }
     }
 
-    fn counted(&self, bytes_out: u64, bytes_in: u64) -> u64 {
-        match self.limits.direction {
-            Direction::Both => bytes_out + bytes_in,
-            Direction::In => bytes_in,
-            Direction::Out => bytes_out,
-        }
+    /// Parses a policy config, filling unset fields from the flags.
+    pub fn config(&self, config: Option<&prost_types::Struct>) -> Result<Config, String> {
+        Config::parse(config, self.defaults)
     }
+}
 
+fn counted(limits: &Limits, bytes_out: u64, bytes_in: u64) -> u64 {
+    match limits.direction {
+        Direction::Both => bytes_out + bytes_in,
+        Direction::In => bytes_in,
+        Direction::Out => bytes_out,
+    }
+}
+
+impl Usage {
     pub fn connection_stream(
         &self,
         mut events: tonic::Streaming<TcpHookEvent>,
@@ -145,6 +155,15 @@ impl Usage {
                 return;
             };
             let key = key_of(&preflight);
+            // The policy config is read per connection, so a policy update
+            // applies to connections opened after it loads.
+            let limits = match usage.config(preflight.config.as_ref()) {
+                Ok(config) => config.limits_for(&key.1),
+                Err(error) => {
+                    let _ = tx.send(Err(Status::invalid_argument(error))).await;
+                    return;
+                }
+            };
             let id = usage.next_id.fetch_add(1, Ordering::Relaxed);
             let blocked = {
                 let mut state = usage.state.lock().unwrap();
@@ -170,7 +189,7 @@ impl Usage {
                 let _ = tx.send(Ok(close_result())).await;
                 return;
             }
-            let interval = prost_types::Duration::try_from(usage.limits.interval).ok();
+            let interval = prost_types::Duration::try_from(limits.interval).ok();
             let _ = tx
                 .send(Ok(TcpHookResult {
                     result: Some(tcp_hook_result::Result::PreflightResult(
@@ -192,10 +211,10 @@ impl Usage {
                     Some(tcp_hook_event::Event::End(end)) => (end.bytes_out, end.bytes_in, true),
                     _ => continue,
                 };
-                let counted = usage.counted(bytes_out, bytes_in);
+                let counted = counted(&limits, bytes_out, bytes_in);
                 let delta = counted.saturating_sub(last);
                 last = counted;
-                usage.record(&key, &preflight, delta);
+                usage.record(&key, &preflight, &limits, delta);
                 if end {
                     break;
                 }
@@ -209,25 +228,24 @@ impl Usage {
     }
 
     /// Add `delta` to the key's window and trip it when over the limit.
-    fn record(&self, key: &Key, preflight: &TcpPreflight, delta: u64) {
+    fn record(&self, key: &Key, preflight: &TcpPreflight, limits: &Limits, delta: u64) {
         let now = Instant::now();
         let mut state = self.state.lock().unwrap();
-        let total =
-            state
-                .windows
-                .entry(key.clone())
-                .or_default()
-                .add(now, delta, self.limits.window);
+        let total = state
+            .windows
+            .entry(key.clone())
+            .or_default()
+            .add(now, delta, limits.window);
         let already_blocked = state
             .blocked_until
             .get(key)
             .is_some_and(|until| *until > now);
-        if total <= self.limits.max_bytes || already_blocked {
+        if total <= limits.max_bytes || already_blocked {
             return;
         }
         state
             .blocked_until
-            .insert(key.clone(), now + self.limits.block_for);
+            .insert(key.clone(), now + limits.block_for);
         let open = state.open.remove(key).unwrap_or_default();
         println!(
             "TRIP sandbox={} policy={} host={}:{} window_bytes={total} max_bytes={} over_by={} closing={} block_for={:?}",
@@ -235,10 +253,10 @@ impl Usage {
             key.1,
             preflight.host,
             preflight.port,
-            self.limits.max_bytes,
-            total - self.limits.max_bytes,
+            limits.max_bytes,
+            total - limits.max_bytes,
             open.len(),
-            self.limits.block_for,
+            limits.block_for,
         );
         for sender in open.into_values() {
             // Never block the lock holder: a full result channel already has
