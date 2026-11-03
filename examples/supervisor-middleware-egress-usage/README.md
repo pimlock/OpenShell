@@ -14,7 +14,10 @@ Covers raw TCP, `tls: skip`, terminated TLS, and plain HTTP the same way, becaus
 
 ## Configure limits in the policy
 
-The limits come from the middleware's `config` in the sandbox policy, so changing the policy changes the budget:
+The limits come from the middleware's `config` in the sandbox policy, so changing the policy changes the budget.
+
+> [!NOTE]
+> The `config` shape below is for demonstration only. OpenShell passes `config` to the middleware service as an opaque structure and does not define its fields: each service defines and validates its own. This example's service reads the fields below.
 
 ```yaml
 network_middlewares:
