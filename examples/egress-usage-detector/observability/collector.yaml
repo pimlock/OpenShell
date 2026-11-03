@@ -10,11 +10,6 @@ receivers:
 processors:
   batch:
     timeout: 200ms
-  # Label metrics with the sandbox: signaltometrics reads record attributes.
-  transform/sandbox:
-    error_mode: ignore
-    log_statements:
-      - set(log.attributes["openshell.sandbox.id"], resource.attributes["openshell.sandbox.id"])
   # Prometheus accepts only cumulative series; signaltometrics emits deltas.
   deltatocumulative: {}
   # Only OCSF traffic accounting records go to the detector.
@@ -70,7 +65,7 @@ service:
       exporters: [otlp/detector]
     logs/lgtm:
       receivers: [otlp]
-      processors: [transform/sandbox, batch]
+      processors: [batch]
       exporters: [otlp/lgtm, signaltometrics]
     metrics/lgtm:
       receivers: [signaltometrics]
