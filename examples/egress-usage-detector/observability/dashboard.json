@@ -10,7 +10,7 @@
   "panels": [
     {
       "type": "timeseries",
-      "title": "bytes_in/s by sandbox and policy key",
+      "title": "bytes_in per minute by sandbox and policy key",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -18,60 +18,8 @@
         "h": 9
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (openshell_sandbox_id, openshell_policy) (rate(openshell_egress_bytes_in[1m]))",
-          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "bytes_out/s by sandbox and policy key",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 12,
-        "h": 9
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (openshell_sandbox_id, openshell_policy) (rate(openshell_egress_bytes_out[1m]))",
-          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "bytes_in, last 5 min, by sandbox and policy key",
-      "gridPos": {
-        "x": 0,
-        "y": 9,
-        "w": 24,
-        "h": 5
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -81,8 +29,61 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (openshell_sandbox_id, openshell_policy) (increase(openshell_egress_bytes_in[5m]))",
-          "legendFormat": "{{openshell_sandbox_id}} / {{openshell_policy}}"
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes_in\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [1m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "bytes_out per minute by sandbox and policy key",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes_out\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [1m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "bytes (in + out), last 5 min, by sandbox and policy key",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [5m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
         }
       ]
     },
