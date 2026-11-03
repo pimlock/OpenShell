@@ -19,6 +19,19 @@ std::thread_local! {
 /// Target string used to identify OCSF tracing events.
 pub const OCSF_TARGET: &str = "ocsf";
 
+/// Target string for high-volume traffic accounting events.
+///
+/// Only the structured sinks (JSONL file, OTLP export) accept this target.
+/// Human-readable sinks (shorthand console and file, gateway log push) skip
+/// it so periodic byte reports never flood `openshell logs`.
+pub const OCSF_TRAFFIC_TARGET: &str = "ocsf_traffic";
+
+/// Whether `target` carries an OCSF event that structured sinks export.
+#[must_use]
+pub fn is_structured_ocsf_target(target: &str) -> bool {
+    target == OCSF_TARGET || target == OCSF_TRAFFIC_TARGET
+}
+
 /// Clone the current thread-local OCSF event, if any.
 ///
 /// Multiple layers can call this for the same event — each receives
@@ -43,6 +56,13 @@ pub fn emit_ocsf_event(event: OcsfEvent) {
     tracing::info!(target: "ocsf", "ocsf_event");
 
     // Clear the thread-local after dispatch completes.
+    clear_current_event();
+}
+
+/// Emit a traffic accounting `OcsfEvent` to the structured sinks only.
+pub fn emit_ocsf_traffic_event(event: OcsfEvent) {
+    set_current_event(event);
+    tracing::info!(target: "ocsf_traffic", "ocsf_event");
     clear_current_event();
 }
 

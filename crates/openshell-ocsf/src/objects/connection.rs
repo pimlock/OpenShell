@@ -21,6 +21,10 @@ pub struct ConnectionInfo {
 
     /// Sibling label for `direction_id`.
     pub direction: String,
+
+    /// Stable per-connection identifier shared by its Traffic and Close events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl ConnectionInfo {
@@ -32,7 +36,15 @@ impl ConnectionInfo {
             protocol_name: protocol.to_string(),
             direction_id,
             direction: direction_id.to_string(),
+            uid: None,
         }
+    }
+
+    /// Set the stable connection identifier.
+    #[must_use]
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
     }
 }
 

@@ -11,7 +11,7 @@ use tracing::Subscriber;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 
-use crate::tracing_layers::event_bridge::{OCSF_TARGET, clone_current_event};
+use crate::tracing_layers::event_bridge::{OCSF_TARGET, OCSF_TRAFFIC_TARGET, clone_current_event};
 
 /// A tracing `Layer` that intercepts OCSF events and writes shorthand output.
 ///
@@ -53,6 +53,9 @@ where
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
 
+        if meta.target() == OCSF_TRAFFIC_TARGET {
+            return;
+        }
         let ts = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
 
         if meta.target() == OCSF_TARGET {

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# OTel Collector that fans OpenShell OCSF records out to the egress detector
+# and to a local Grafana LGTM stack (Grafana, Loki, Tempo, Prometheus).
+#
+# Docker sandbox supervisors run with host networking and export to the
+# gateway's OCSF endpoint, so the collector uses host networking too and
+# listens on 127.0.0.1:4317. The detector listens on 127.0.0.1:14317.
+
+name: openshell-egress-obs
+
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.139.0
+    network_mode: host
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - lgtm
+    restart: unless-stopped
+
+  lgtm:
+    image: grafana/otel-lgtm:0.11.10
+    ports:
+      - "127.0.0.1:3000:3000"   # Grafana (admin / admin)
+      - "127.0.0.1:24317:4317"  # LGTM's own OTLP/gRPC receiver
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    restart: unless-stopped

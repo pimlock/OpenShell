@@ -1,0 +1,111 @@
+{
+  "uid": "openshell-egress",
+  "title": "OpenShell egress (spike 01b)",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "bytes_in per minute by sandbox and policy key",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes_in\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [1m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "bytes_out per minute by sandbox and policy key",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes_out\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [1m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "bytes (in + out), last 5 min, by sandbox and policy key",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "sum by (sandbox, policy) (sum_over_time({service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\" | json bytes=\"traffic.bytes\", sandbox=\"container.name\", policy=\"firewall_rule.name\" | unwrap bytes [5m]))",
+          "legendFormat": "{{sandbox}} / {{policy}}"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "OCSF Traffic and Close events",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"openshell-supervisor\"} | ocsf_class_uid=\"4001\" | ocsf_activity_id=~\"2|6\""
+        }
+      ]
+    }
+  ]
+}

@@ -53,8 +53,9 @@ pub use enums::{
 // --- Object types ---
 pub use objects::{
     Actor, AiModel, Api, Attack, ConnectionInfo, Container, Device, Endpoint, Evidence,
-    FindingInfo, FirewallRule, HttpRequest, HttpResponse, Image, Metadata, OsInfo, Process,
-    Product, Remediation, ResourceDetails, Service, Tactic, Technique, Url, User,
+    FindingInfo, FirewallRule, HttpRequest, HttpResponse, Image, Metadata, NetworkTraffic, OsInfo,
+    Process, Product, Remediation, ResourceDetails, Service, Tactic, Technique, TrafficReport, Url,
+    User,
 };
 
 // --- Sanitizers ---
@@ -69,7 +70,7 @@ pub use builders::{
 
 // --- Tracing layers ---
 pub use tracing_layers::{
-    OCSF_TARGET, OcsfJsonSettings, OcsfJsonlLayer, OcsfShorthandLayer, bind_thread_json_settings,
-    clear_current_event, clone_current_event, emit_ocsf_event, emit_ocsf_event_routed,
-    set_current_event,
+    OCSF_TARGET, OCSF_TRAFFIC_TARGET, OcsfJsonSettings, OcsfJsonlLayer, OcsfShorthandLayer,
+    bind_thread_json_settings, clear_current_event, clone_current_event, emit_ocsf_event,
+    emit_ocsf_event_routed, emit_ocsf_traffic_event, is_structured_ocsf_target, set_current_event,
 };

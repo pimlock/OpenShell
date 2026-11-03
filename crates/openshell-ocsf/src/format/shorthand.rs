@@ -732,6 +732,7 @@ mod tests {
             disposition: Some(DispositionId::Allowed),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            traffic: TrafficReport::default(),
         });
 
         let shorthand = event.format_shorthand();
@@ -759,6 +760,7 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: Some(3),
             is_src_dst_assignment_known: Some(true),
+            traffic: TrafficReport::default(),
         });
 
         let shorthand = event.format_shorthand();
@@ -898,6 +900,7 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            traffic: TrafficReport::default(),
         });
 
         let shorthand = event.format_shorthand();
@@ -925,6 +928,7 @@ mod tests {
             disposition: Some(DispositionId::Allowed),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            traffic: TrafficReport::default(),
         });
 
         let shorthand = event.format_shorthand();
@@ -952,6 +956,7 @@ mod tests {
             disposition: None,
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            traffic: TrafficReport::default(),
         });
 
         let shorthand = event.format_shorthand();
@@ -1012,6 +1017,7 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            traffic: TrafficReport::default(),
         });
         event.format_shorthand()
     }

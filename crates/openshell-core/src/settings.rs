@@ -106,6 +106,13 @@ pub const PROPOSAL_APPROVAL_MODE_KEY: &str = "proposal_approval_mode";
 /// fail-closes on unknown persisted values for defense in depth.
 pub const PROPOSAL_APPROVAL_MODE_VALUES: &[&str] = &["manual", "auto"];
 
+/// Interval in seconds for periodic OCSF Network Activity `Traffic` events.
+///
+/// The events carry per-connection byte counts. 0 (the default) disables
+/// them; values below 5 are raised to 5. Connection `Close` events with totals are always
+/// emitted. Traffic events go to the OCSF JSONL file and OTLP export only.
+pub const OCSF_TRAFFIC_INTERVAL_SECS_KEY: &str = "ocsf_traffic_interval_secs";
+
 pub const REGISTERED_SETTINGS: &[RegisteredSetting] = &[
     // When true the supervisor emits OCSF-JSON records to stderr and writes
     // JSONL to `/var/log/openshell-ocsf*.jsonl` when file logging is available.
@@ -113,6 +120,12 @@ pub const REGISTERED_SETTINGS: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "ocsf_json_enabled",
         kind: SettingValueKind::Bool,
+        allowed_string_values: None,
+    },
+    // See OCSF_TRAFFIC_INTERVAL_SECS_KEY. Defaults to 0 (off).
+    RegisteredSetting {
+        key: OCSF_TRAFFIC_INTERVAL_SECS_KEY,
+        kind: SettingValueKind::Int,
         allowed_string_values: None,
     },
     // Deprecated and ignored: OpenShell emits OCSF 1.8.0 only. Still

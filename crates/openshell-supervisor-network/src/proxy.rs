@@ -1364,7 +1364,7 @@ async fn handle_transparent_tcp_connection(
     let approved_real_ip_candidates = connector.addrs().to_vec();
     generation_guard.ensure_current()?;
     let dial_span = egress::dial_span(&connect_span);
-    let mut upstream =
+    let upstream =
         dial_transparent_upstream(&upstream_proxy, &host, port, &approved_real_ip_candidates)
             .instrument(dial_span.clone())
             .await
@@ -1433,6 +1433,7 @@ async fn handle_transparent_tcp_connection(
         }
     ));
     emit_activity(&activity_tx, false, "transparent_tcp");
+    let mut upstream = track_upstream(upstream, &decision, &host, port);
     relay::relay_tcp(&mut client, &mut upstream, &generation_guard, &ctx).await
 }
 
@@ -3094,7 +3095,7 @@ async fn handle_mediated_connection(
         return Ok(());
     };
     let mut upstream = match upstream_result {
-        Ok(upstream) => upstream,
+        Ok(upstream) => track_upstream(upstream, &decision, &host_lc, port),
         Err(error) => {
             egress::mark_error(&dial_span);
             if let Some(observer) = connect_endpoint_observer.as_ref() {
@@ -4585,6 +4586,33 @@ fn validate_declared_endpoint_resolved_addrs(
     }
 
     Ok(())
+}
+
+/// Count the bytes an authorized upstream connection moves and report them
+/// as OCSF traffic events.
+fn track_upstream<S>(
+    stream: S,
+    decision: &EgressDecision,
+    host: &str,
+    port: u16,
+) -> crate::traffic::CountingStream<S> {
+    let policy = match &decision.action {
+        NetworkAction::Allow { matched_policy } => matched_policy.as_deref().unwrap_or("-"),
+        NetworkAction::Deny { .. } => "-",
+    };
+    crate::traffic::track(
+        stream,
+        crate::traffic::ConnectionMeta {
+            host: host.to_string(),
+            port,
+            policy: policy.to_string(),
+            binary: decision
+                .binary
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |path| path.display().to_string()),
+            pid: decision.binary_pid,
+        },
+    )
 }
 
 /// Dial a validated upstream destination for a TLS (CONNECT) tunnel.
@@ -6716,7 +6744,7 @@ async fn handle_forward_proxy(
     let dial_span = egress::dial_span(&connect_span);
     let dial_result = connector.connect().instrument(dial_span.clone()).await;
     let mut upstream = match dial_result {
-        Ok(s) => s,
+        Ok(s) => track_upstream(s, &decision, &host_lc, port),
         Err(e) => {
             egress::mark_error(&dial_span);
             let event = HttpActivityBuilder::new(openshell_ocsf::ctx::ctx())

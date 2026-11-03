@@ -689,6 +689,7 @@ impl ConfigRuntime {
 
         // Apply OCSF JSON toggle from the `ocsf_json_enabled` setting.
         apply_ocsf_json_setting(&ctx.ocsf_enabled, &result.settings);
+        apply_ocsf_traffic_setting(&result.settings);
         report_deprecated_ocsf_schema_version(&ctx.ocsf_schema_version, &result.settings);
 
         // Apply the agent-proposals feature toggle. On a false→true transition
@@ -1277,6 +1278,7 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
                         runtime.applied_revision = Some(sandbox_config_revision(&result));
                     }
                     apply_ocsf_json_setting(&ctx.ocsf_enabled, &result.settings);
+                    apply_ocsf_traffic_setting(&result.settings);
                     report_deprecated_ocsf_schema_version(
                         &ctx.ocsf_schema_version,
                         &result.settings,
@@ -1319,6 +1321,7 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
                 }
                 (InitialPollDisposition::TrackOnly, _) => {
                     apply_ocsf_json_setting(&ctx.ocsf_enabled, &result.settings);
+                    apply_ocsf_traffic_setting(&result.settings);
                     report_deprecated_ocsf_schema_version(
                         &ctx.ocsf_schema_version,
                         &result.settings,
@@ -1452,6 +1455,32 @@ fn apply_ocsf_json_setting(
     let prev_ocsf = enabled.swap(new_ocsf, Ordering::Relaxed);
     if new_ocsf != prev_ocsf {
         info!(ocsf_json_enabled = new_ocsf, "OCSF JSONL logging toggled");
+    }
+}
+
+/// Apply the `ocsf_traffic_interval_secs` setting to the traffic reporter.
+fn apply_ocsf_traffic_setting(
+    settings: &std::collections::HashMap<String, openshell_core::proto::EffectiveSetting>,
+) {
+    use openshell_core::proto::setting_value;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static APPLIED: AtomicU64 = AtomicU64::new(0);
+    let requested = settings
+        .get(openshell_core::settings::OCSF_TRAFFIC_INTERVAL_SECS_KEY)
+        .and_then(|es| es.value.as_ref())
+        .and_then(|sv| sv.value.as_ref())
+        .and_then(|v| match v {
+            setting_value::Value::IntValue(v) => u64::try_from(*v).ok(),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let effective = openshell_supervisor_network::traffic::set_interval_secs(requested);
+    if APPLIED.swap(effective, Ordering::Relaxed) != effective {
+        info!(
+            ocsf_traffic_interval_secs = effective,
+            "OCSF traffic interval changed"
+        );
     }
 }
 

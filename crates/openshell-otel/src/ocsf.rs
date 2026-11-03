@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use openshell_ocsf::{OCSF_TARGET, OcsfEvent, SeverityId, clone_current_event};
+use openshell_ocsf::{OcsfEvent, SeverityId, clone_current_event, is_structured_ocsf_target};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry_sdk::Resource;
@@ -110,7 +110,7 @@ pub struct OcsfOtlpLayer {
 
 impl<S: Subscriber> Layer<S> for OcsfOtlpLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != OCSF_TARGET {
+        if !is_structured_ocsf_target(event.metadata().target()) {
             return;
         }
         let Some(event) = clone_current_event() else {
