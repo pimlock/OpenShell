@@ -6,6 +6,7 @@
 pub(crate) mod destination;
 mod egress;
 mod relay;
+mod tcp_hook;
 #[cfg(test)]
 pub(crate) use relay::relay_inspected_http_stream_for_test;
 
@@ -1361,10 +1362,24 @@ async fn handle_transparent_tcp_connection(
     if middleware_gate == crate::l7::middleware::UninspectableTrafficGate::BypassWithFinding {
         crate::l7::middleware::emit_middleware_uninspectable(&ctx, "transparent tcp", false);
     }
+    let tcp_hook_session = match tcp_hook::admit(
+        &opa_engine,
+        &ctx,
+        openshell_core::proto::TcpInspection::TransparentTcp,
+    )
+    .await
+    {
+        openshell_supervisor_middleware::TcpHookAdmission::Allow(session) => session,
+        openshell_supervisor_middleware::TcpHookAdmission::Deny(denial) => {
+            tcp_hook::emit_deny(&ctx, &denial);
+            emit_activity(&activity_tx, true, "tcp_middleware_denied");
+            return Ok(());
+        }
+    };
     let approved_real_ip_candidates = connector.addrs().to_vec();
     generation_guard.ensure_current()?;
     let dial_span = egress::dial_span(&connect_span);
-    let mut upstream =
+    let upstream =
         dial_transparent_upstream(&upstream_proxy, &host, port, &approved_real_ip_candidates)
             .instrument(dial_span.clone())
             .await
@@ -1433,6 +1448,7 @@ async fn handle_transparent_tcp_connection(
         }
     ));
     emit_activity(&activity_tx, false, "transparent_tcp");
+    let mut upstream = tcp_hook_session.wrap(upstream);
     relay::relay_tcp(&mut client, &mut upstream, &generation_guard, &ctx).await
 }
 
@@ -1830,6 +1846,7 @@ fn middleware_uninspectable_gate(
 ) -> Result<crate::l7::middleware::UninspectableTrafficGate> {
     let input = crate::l7::middleware::middleware_network_input(ctx);
     let (chain, _generation) = opa_engine.query_middleware_chain_with_generation(&input)?;
+    let chain = crate::l7::middleware::inspecting_entries(&opa_engine.middleware_runner()?, chain);
     Ok(crate::l7::middleware::uninspectable_traffic_gate(&chain))
 }
 
@@ -3117,6 +3134,31 @@ async fn handle_mediated_connection(
         }
     }
 
+    let tcp_hook_inspection = if effective_tls_skip {
+        openshell_core::proto::TcpInspection::TlsPassthrough
+    } else {
+        openshell_core::proto::TcpInspection::ConnectTunnel
+    };
+    let tcp_hook_session = match tcp_hook::admit(&opa_engine, &ctx, tcp_hook_inspection).await {
+        openshell_supervisor_middleware::TcpHookAdmission::Allow(session) => session,
+        openshell_supervisor_middleware::TcpHookAdmission::Deny(denial) => {
+            tcp_hook::emit_deny(&ctx, &denial);
+            emit_activity_simple(activity_tx.as_ref(), true, "tcp_middleware_denied");
+            respond(
+                &mut client,
+                &build_json_error_response_with_reason(
+                    403,
+                    "Forbidden",
+                    "middleware_denied",
+                    "connection denied by TCP middleware",
+                    &denial.reason_code,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
     let dial_span = egress::dial_span(&connect_span);
     let upstream_result = tokio::select! {
         result = dial_upstream(&upstream_proxy, &host_lc, &raw_host_lc, port, connector.addrs())
@@ -3140,7 +3182,7 @@ async fn handle_mediated_connection(
         return Ok(());
     };
     let mut upstream = match upstream_result {
-        Ok(upstream) => upstream,
+        Ok(upstream) => tcp_hook_session.wrap(upstream),
         Err(error) => {
             egress::mark_error(&dial_span);
             if let Some(observer) = connect_endpoint_observer.as_ref() {
@@ -6742,10 +6784,39 @@ async fn handle_forward_proxy(
     // would need absolute-form requests rather than a CONNECT tunnel. Dial
     // only after every local authorization and transformation step so a
     // rejected WebSocket preflight cannot contact the destination.
+    let tcp_hook_session = match tcp_hook::admit(
+        &opa_engine,
+        &l7_ctx,
+        openshell_core::proto::TcpInspection::HttpForward,
+    )
+    .await
+    {
+        openshell_supervisor_middleware::TcpHookAdmission::Allow(session) => session,
+        openshell_supervisor_middleware::TcpHookAdmission::Deny(denial) => {
+            tcp_hook::emit_deny(&l7_ctx, &denial);
+            if let Some(session) = middleware_session.take() {
+                session
+                    .end(openshell_core::proto::MiddlewareSessionEndReason::MiddlewareDenial)
+                    .await;
+            }
+            respond(
+                client,
+                &build_json_error_response_with_reason(
+                    403,
+                    "Forbidden",
+                    "middleware_denied",
+                    "connection denied by TCP middleware",
+                    &denial.reason_code,
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     let dial_span = egress::dial_span(&connect_span);
     let dial_result = connector.connect().instrument(dial_span.clone()).await;
     let mut upstream = match dial_result {
-        Ok(s) => s,
+        Ok(s) => tcp_hook_session.wrap(s),
         Err(e) => {
             egress::mark_error(&dial_span);
             let event = HttpActivityBuilder::new(openshell_ocsf::ctx::ctx())

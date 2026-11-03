@@ -9,6 +9,7 @@ pub mod headers;
 mod http_hooks;
 mod remote;
 mod response;
+mod tcp_hooks;
 mod websocket;
 
 pub use http_hooks::{
@@ -44,8 +45,8 @@ use miette::{Result, miette};
 use prost::Message;
 
 use openshell_core::extension_protocol::{
-    ExtensionFamily, NegotiatedExtension, SUPERVISOR_MIDDLEWARE_HTTP_HOOKS, gateway_metadata,
-    negotiate,
+    ExtensionFamily, NegotiatedExtension, SUPERVISOR_MIDDLEWARE_HTTP_HOOKS,
+    SUPERVISOR_MIDDLEWARE_TCP_HOOKS, gateway_metadata, negotiate,
 };
 use openshell_core::proto::middleware::v1::supervisor_middleware_server::SupervisorMiddleware;
 use openshell_core::proto::{
@@ -62,7 +63,11 @@ use binding_policy::BindingPolicy;
 pub use openshell_core::middleware::{
     HttpRequestHookResultStream, HttpRequestView, HttpResponseHookResultStream,
     HttpResponseResultStream, InProcessMiddleware, SupervisorMiddlewareEndpoint,
-    WebSocketResponseStream,
+    TcpHookResultStream, WebSocketResponseStream,
+};
+pub use tcp_hooks::{
+    MAX_TCP_STATS_INTERVAL, MIN_TCP_STATS_INTERVAL, MeteredStream, TcpCloseObserver,
+    TcpConnectionMeter, TcpHookAdmission, TcpHookDenial, TcpHookRequest, TcpHookSession,
 };
 
 pub type MiddlewareService =
@@ -234,6 +239,13 @@ impl InProcessMiddleware for EndpointInProcessAdapter {
         requests: tokio::sync::mpsc::Receiver<HttpResponseHookEvent>,
     ) -> std::result::Result<HttpResponseHookResultStream, tonic::Status> {
         self.endpoint.open_http_response_hook(requests).await
+    }
+
+    async fn open_tcp_connection_hook(
+        &self,
+        requests: tokio::sync::mpsc::Receiver<openshell_core::proto::TcpHookEvent>,
+    ) -> std::result::Result<TcpHookResultStream, tonic::Status> {
+        self.endpoint.open_tcp_connection_hook(requests).await
     }
 }
 
@@ -490,6 +502,41 @@ fn validate_manifest_http_hooks_capability(
     Ok(())
 }
 
+/// True when the service requires the TCP hooks capability.
+fn requires_tcp_hooks(manifest: &MiddlewareManifest) -> bool {
+    manifest.extension.as_ref().is_some_and(|extension| {
+        extension
+            .required_capabilities
+            .iter()
+            .any(|capability| capability == SUPERVISOR_MIDDLEWARE_TCP_HOOKS)
+    })
+}
+
+fn is_tcp_binding(binding: &MiddlewareBinding) -> bool {
+    binding.operation == SupervisorMiddlewareOperation::TcpConnection as i32
+}
+
+/// A service with a TCP connection binding must require the TCP hooks
+/// capability, so peers without TCP hooks reject it at Describe.
+fn validate_manifest_tcp_hooks_capability(
+    source: &str,
+    manifest: &MiddlewareManifest,
+) -> Result<()> {
+    if manifest.bindings.iter().any(is_tcp_binding) && !requires_tcp_hooks(manifest) {
+        return Err(miette!(
+            "{source} declares a TCP_CONNECTION binding without requiring {SUPERVISOR_MIDDLEWARE_TCP_HOOKS}"
+        ));
+    }
+    Ok(())
+}
+
+/// True when every binding of the service is a TCP connection binding. Such a
+/// service observes connections without inspecting content, so it never
+/// requires traffic to be inspectable.
+fn manifest_is_tcp_only(manifest: &MiddlewareManifest) -> bool {
+    !manifest.bindings.is_empty() && manifest.bindings.iter().all(is_tcp_binding)
+}
+
 /// Legacy HTTP hooks and WebSocket bindings carry payloads. An HTTP hook
 /// binding that advertises no payload limit is offered no body modes, so it
 /// can only continue or deny at preflight.
@@ -497,6 +544,9 @@ fn binding_requires_payload_limit(
     manifest: &MiddlewareManifest,
     binding: &MiddlewareBinding,
 ) -> bool {
+    if is_tcp_binding(binding) {
+        return false;
+    }
     binding_http_hook_version(manifest, binding) != Some(HttpHookVersion::Current)
         || binding.max_payload_bytes > 0
 }
@@ -869,6 +919,16 @@ impl MiddlewareDispatch {
             Self::Grpc(service) => service.open_http_response_hook(receiver).await,
         }
     }
+
+    async fn open_tcp_connection_hook(
+        &self,
+        receiver: tokio::sync::mpsc::Receiver<openshell_core::proto::TcpHookEvent>,
+    ) -> std::result::Result<TcpHookResultStream, tonic::Status> {
+        match self {
+            Self::InProcess(service) => service.open_tcp_connection_hook(receiver).await,
+            Self::Grpc(service) => service.open_tcp_connection_hook(receiver).await,
+        }
+    }
 }
 
 struct MiddlewareServiceState {
@@ -1120,6 +1180,10 @@ fn supported_binding(
             Some(SupervisorMiddlewarePhase::PreCredentials),
         ) => Ok(SupervisorMiddlewareBinding::WebsocketMessagePreCredentials),
         (
+            Some(SupervisorMiddlewareOperation::TcpConnection),
+            Some(SupervisorMiddlewarePhase::PreConnect),
+        ) => Ok(SupervisorMiddlewareBinding::TcpConnectionPreConnect),
+        (
             Some(SupervisorMiddlewareOperation::WebsocketMessage),
             Some(SupervisorMiddlewarePhase::PreReturn),
         ) => Err(miette!(
@@ -1140,6 +1204,7 @@ fn validate_manifest_bindings(
     }
 
     validate_manifest_http_hooks_capability(source, manifest)?;
+    validate_manifest_tcp_hooks_capability(source, manifest)?;
     let mut bindings = BTreeMap::new();
     for binding in &manifest.bindings {
         let selector = supported_binding(source, binding)?;
@@ -1539,6 +1604,78 @@ impl MiddlewareRegistry {
                 .then(|| manifest_http_hook_version(manifest))
                 .flatten()
         })
+    }
+
+    /// True unless this registry described the middleware and every one of its
+    /// bindings is a TCP connection binding. Only such a service may select
+    /// traffic `OpenShell` cannot inspect (`tls: skip`, raw TCP) under
+    /// `fail_closed`: it observes connections without inspecting content.
+    #[must_use]
+    pub fn requires_inspection(&self, implementation: &str) -> bool {
+        !self.services.iter().any(|state| {
+            state.manifest.get().is_some_and(|manifest| {
+                ChainRunner::attachment_name(state, manifest) == implementation
+                    && manifest_is_tcp_only(manifest)
+            })
+        })
+    }
+
+    /// Gateway rules for policies that use TCP hook middleware.
+    ///
+    /// - `on_error: fail_open` is rejected on an entry whose service has a TCP
+    ///   connection binding: TCP hooks always fail closed.
+    /// - A `fail_closed` entry whose service inspects content (any HTTP or
+    ///   WebSocket binding, or an undescribed service) must not select a
+    ///   `tls: skip` endpoint. TCP-only services may.
+    pub async fn validate_tcp_hook_rules(&self, policy: &SandboxPolicy) -> Result<()> {
+        use openshell_core::host_pattern::{HostPattern, HostSelector};
+        let manifests = ChainRunner::from_registry(self.clone()).manifests().await?;
+        let manifest_for = |implementation: &str| {
+            manifests
+                .iter()
+                .find(|(state, manifest)| {
+                    ChainRunner::attachment_name(state, manifest) == implementation
+                })
+                .map(|(_, manifest)| manifest)
+        };
+        let mut configs: Vec<_> = policy.network_middlewares.iter().collect();
+        configs.sort_unstable_by_key(|(name, _)| name.as_str());
+        for (name, config) in configs {
+            let manifest = manifest_for(&config.middleware);
+            let on_error = OnError::parse(&config.on_error)?;
+            if on_error == OnError::FailOpen
+                && manifest.is_some_and(|manifest| manifest.bindings.iter().any(is_tcp_binding))
+            {
+                return Err(miette!(
+                    "middleware config '{name}' cannot use on_error: fail_open with '{}': TCP hook middleware is always fail-closed; use fail_closed",
+                    config.middleware
+                ));
+            }
+            if on_error == OnError::FailOpen || manifest.is_some_and(manifest_is_tcp_only) {
+                continue;
+            }
+            let Some(selector) = config
+                .endpoints
+                .as_ref()
+                .and_then(|selector| HostSelector::new(&selector.include, &selector.exclude).ok())
+            else {
+                continue;
+            };
+            for (key, rule) in &policy.network_policies {
+                for endpoint in &rule.endpoints {
+                    if endpoint.tls == openshell_core::proto::NetworkTlsMode::Skip as i32
+                        && HostPattern::new(&endpoint.host)
+                            .is_ok_and(|pattern| selector.may_match_pattern(&pattern))
+                    {
+                        return Err(miette!(
+                            "fail-closed middleware config '{name}' selects tls: skip endpoint '{}' in network policy '{key}'; its service inspects content it cannot see there. Exclude the host, or use a TCP-only middleware service",
+                            endpoint.host
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Gateway rules for policies that use HTTP hook middleware.
@@ -1982,6 +2119,12 @@ impl ChainRunner {
             entries: described_entries,
             unbound,
         })
+    }
+
+    /// See [`MiddlewareRegistry::requires_inspection`].
+    #[must_use]
+    pub fn requires_inspection(&self, implementation: &str) -> bool {
+        self.registry.requires_inspection(implementation)
     }
 
     /// HTTP hook version of a registered middleware, without a network call. See

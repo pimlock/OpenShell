@@ -14,9 +14,14 @@ use crate::proto::{
     HttpHeader, HttpRequestEvaluation, HttpRequestHookEvent, HttpRequestHookResult,
     HttpRequestResult, HttpRequestTarget, HttpResponseEvent, HttpResponseEventResult,
     HttpResponseHookEvent, HttpResponseHookResult, MiddlewareDescribeRequest, MiddlewareManifest,
-    RequestContext, SupervisorMiddlewarePhase, ValidateConfigRequest, ValidateConfigResponse,
-    WebSocketSessionEvent, WebSocketSessionEventResult,
+    RequestContext, SupervisorMiddlewarePhase, TcpHookEvent, TcpHookResult, ValidateConfigRequest,
+    ValidateConfigResponse, WebSocketSessionEvent, WebSocketSessionEventResult,
 };
+
+/// Transport-neutral result stream for one `TcpHooks.EvaluateConnection`
+/// exchange.
+pub type TcpHookResultStream =
+    Pin<Box<dyn tokio_stream::Stream<Item = Result<TcpHookResult, Status>> + Send + 'static>>;
 
 /// Transport-neutral result stream for one `HttpHooks.EvaluateRequest`
 /// exchange.
@@ -98,6 +103,16 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
     ) -> Result<HttpResponseHookResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP hook responses",
+        ))
+    }
+
+    /// Open one TCP connection hook exchange (`TcpHooks.EvaluateConnection`).
+    async fn open_tcp_connection_hook(
+        &self,
+        _requests: mpsc::Receiver<TcpHookEvent>,
+    ) -> Result<TcpHookResultStream, Status> {
+        Err(Status::unimplemented(
+            "middleware does not implement TCP connection hooks",
         ))
     }
 }
@@ -338,6 +353,16 @@ pub trait InProcessMiddleware: Send + Sync {
     ) -> std::result::Result<HttpResponseHookResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP hook responses",
+        ))
+    }
+
+    /// Open one TCP connection hook exchange (`TcpHooks.EvaluateConnection`).
+    async fn open_tcp_connection_hook(
+        &self,
+        _requests: mpsc::Receiver<TcpHookEvent>,
+    ) -> std::result::Result<TcpHookResultStream, Status> {
+        Err(Status::unimplemented(
+            "middleware does not implement TCP connection hooks",
         ))
     }
 }

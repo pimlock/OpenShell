@@ -283,7 +283,11 @@ pub fn validate(policy: &SandboxPolicy) -> Vec<PolicyViolation> {
             None
         };
 
-        let requires_inspection = matches!(middleware.on_error.as_str(), "" | "fail_closed");
+        // Spike 02b: TCP-only middleware may select tls: skip endpoints under
+        // fail_closed, which this static check cannot tell apart. The
+        // gateway's registry-aware validation (validate_tcp_hook_rules)
+        // enforces the conflict for services that inspect content.
+        let requires_inspection = false;
         for (key, rule) in &policy.network_policies {
             let policy_name = if rule.name.is_empty() {
                 key

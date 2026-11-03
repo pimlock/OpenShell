@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# pkg_proxy stands in for artifactory.internal. Docker sandboxes reach the
+# host-run upstream only through host.openshell.internal, so the two policy
+# keys are told apart by port. The middleware groups usage by sandbox and
+# policy key, and reads its limits from config below: change the policy to
+# change the budget.
+
+version: 1
+
+network_middlewares:
+  egress-usage:
+    name: Egress usage
+    middleware: egress-usage-example
+    order: 10
+    config:
+      # Per sandbox and policy key.
+      max_bytes: 20MB
+      window: 60s
+      # How often OpenShell reports byte totals (1s to 60s). Bytes over the
+      # budget before a cut are roughly rate x interval.
+      interval: 1s
+      block_for: 120s
+      direction: both
+      # Overrides for one network policy key.
+      policies:
+        other_svc:
+          max_bytes: 50MB
+    on_error: fail_closed
+    endpoints:
+      include:
+        - host.openshell.internal
+
+network_policies:
+  pkg_proxy:
+    name: pkg_proxy
+    endpoints:
+      # Inspected plain HTTP.
+      - host: host.openshell.internal
+        port: 47080
+        protocol: rest
+        enforcement: enforce
+        access: full
+      # TLS passthrough: HTTP hooks never see this traffic.
+      - host: host.openshell.internal
+        port: 47443
+        tls: skip
+      # Raw TCP.
+      - host: host.openshell.internal
+        port: 47900
+        protocol: tcp
+    binaries:
+      - path: "/**"
+  other_svc:
+    name: other_svc
+    endpoints:
+      - host: host.openshell.internal
+        port: 47081
+        protocol: rest
+        enforcement: enforce
+        access: full
+    binaries:
+      - path: "/**"

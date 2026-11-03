@@ -60,6 +60,19 @@ service HttpHooks {
       returns (stream HttpResponseHookResult);
 }
 
+// TcpHooks observes and controls admitted upstream TCP connections for one
+// operator-run middleware. It shares SupervisorMiddleware's registration,
+// discovery, configuration, and endpoint.
+service TcpHooks {
+  // One stream per admitted upstream connection and middleware stage.
+  // OpenShell calls it for the TCP_CONNECTION bindings of a service whose
+  // manifest lists openshell.supervisor-middleware.tcp-hooks in
+  // extension.required_capabilities. The first event is a preflight, sent
+  // after network-policy admission and before OpenShell dials the upstream.
+  // The first result answers it. A close result may follow at any time.
+  rpc EvaluateConnection(stream TcpHookEvent) returns (stream TcpHookResult);
+}
+
 message MiddlewareDescribeRequest {
   // Gateway or supervisor protocol metadata. Middleware must reject unmet
   // requirements before accepting traffic.
@@ -916,6 +929,10 @@ enum SupervisorMiddlewareOperation {
   // hooks capability, and the deprecated HttpResponsePreReturn.Evaluate
   // otherwise.
   SUPERVISOR_MIDDLEWARE_OPERATION_HTTP_RESPONSE = 3;
+  // An admitted upstream TCP connection at PRE_CONNECT. OpenShell calls
+  // TcpHooks.EvaluateConnection; the service must require the
+  // openshell.supervisor-middleware.tcp-hooks capability.
+  SUPERVISOR_MIDDLEWARE_OPERATION_TCP_CONNECTION = 4;
 }
 
 // Ordered phase within a supervisor operation.
@@ -923,6 +940,8 @@ enum SupervisorMiddlewarePhase {
   SUPERVISOR_MIDDLEWARE_PHASE_UNSPECIFIED = 0;
   SUPERVISOR_MIDDLEWARE_PHASE_PRE_CREDENTIALS = 1;
   SUPERVISOR_MIDDLEWARE_PHASE_PRE_RETURN = 2;
+  // After network-policy admission and before OpenShell dials the upstream.
+  SUPERVISOR_MIDDLEWARE_PHASE_PRE_CONNECT = 3;
 }
 
 // WebSocketSessionEvent is one ordered event in a stage-local stream.
@@ -1182,4 +1201,125 @@ message HttpRequestResult {
   // letters, digits, and underscores, with a maximum length of 64 bytes.
   // OpenShell may return this code to the requester, unlike free-form reason.
   string reason_code = 8;
+}
+
+// TCP hooks. One ordered event in a TcpHooks.EvaluateConnection stream.
+// Preflight is always first. stats events follow only in STATS mode. end is
+// best effort and has no result.
+message TcpHookEvent {
+  oneof event {
+    TcpPreflight preflight = 1;
+    TcpStats stats = 2;
+    TcpEnd end = 3;
+  }
+}
+
+// One result in a TcpHooks.EvaluateConnection stream. The first result must
+// be preflight_result or close. close may also follow a preflight result at
+// any time to abort the open connection.
+message TcpHookResult {
+  oneof result {
+    TcpPreflightResult preflight_result = 1;
+    TcpClose close = 2;
+  }
+}
+
+// How OpenShell carries the connection's bytes after admission.
+enum TcpInspection {
+  TCP_INSPECTION_UNSPECIFIED = 0;
+  // CONNECT tunnel with tls: skip: raw bytes, usually TLS ciphertext.
+  TCP_INSPECTION_TLS_PASSTHROUGH = 1;
+  // CONNECT tunnel whose payload OpenShell detects after the tunnel opens:
+  // terminated TLS, plaintext HTTP, or raw TCP.
+  TCP_INSPECTION_CONNECT_TUNNEL = 2;
+  // Transparent TCP redirected without a proxy request.
+  TCP_INSPECTION_TRANSPARENT_TCP = 3;
+  // Plain HTTP request sent to the forward proxy.
+  TCP_INSPECTION_HTTP_FORWARD = 4;
+}
+
+// Observation mode a TCP stage can select at preflight.
+enum TcpMode {
+  TCP_MODE_UNSPECIFIED = 0;
+  // Cumulative byte totals at the stage's interval. The stage never sees
+  // connection content.
+  TCP_MODE_STATS = 1;
+}
+
+message TcpPreflight {
+  // Destination hostname selected by network policy.
+  string host = 1;
+  // Destination TCP port.
+  uint32 port = 2;
+  // Reserved: TLS server name, when known before dial. Currently empty.
+  string sni = 3;
+  TcpInspection inspection = 4;
+  // Network policy keys that admitted the connection.
+  repeated string policy_keys = 5;
+  // Stable endpoint identity, currently "host:port".
+  string endpoint_id = 6;
+  // Sandbox, connection, and originating process identity. request_id
+  // identifies this connection.
+  RequestContext context = 7;
+  // Built-in middleware name or operator-owned registration name.
+  string middleware_name = 8;
+  // Validated service configuration.
+  google.protobuf.Struct config = 9;
+  // Modes this connection is eligible for.
+  repeated TcpMode permitted_modes = 10;
+  TcpLimits limits = 11;
+  // Phase of the TCP_CONNECTION binding this stream serves: PRE_CONNECT.
+  SupervisorMiddlewarePhase phase = 12;
+}
+
+message TcpLimits {
+  // Shortest and longest stats interval OpenShell accepts.
+  google.protobuf.Duration min_stats_interval = 1;
+  google.protobuf.Duration max_stats_interval = 2;
+}
+
+message TcpPreflightResult {
+  oneof decision {
+    // Relay without this stage observing the connection. Only end follows.
+    TcpContinue continue_without_inspection = 1;
+    // Observe the connection in one permitted mode.
+    TcpInspect inspect = 2;
+  }
+  MiddlewareDiagnostics diagnostics = 3;
+}
+
+message TcpContinue {}
+
+message TcpInspect {
+  oneof mode {
+    TcpStatsMode stats = 1;
+  }
+}
+
+message TcpStatsMode {
+  // Stats interval, clamped to the offered limits. Unset uses the minimum.
+  google.protobuf.Duration interval = 1;
+}
+
+// Cumulative totals since the upstream connection opened, counted at the
+// upstream socket: what left for and arrived from the upstream after every
+// transform. Sent only when a total changed since the previous stats event.
+message TcpStats {
+  uint64 bytes_out = 1;
+  uint64 bytes_in = 2;
+  google.protobuf.Duration elapsed = 3;
+}
+
+// Final totals. Best effort.
+message TcpEnd {
+  uint64 bytes_out = 1;
+  uint64 bytes_in = 2;
+  google.protobuf.Duration duration = 3;
+  MiddlewareSessionEndReason reason = 4;
+}
+
+// As the first result, denies the connection before OpenShell dials the
+// upstream. Later, aborts the open connection in both directions.
+message TcpClose {
+  MiddlewareDiagnostics diagnostics = 1;
 }

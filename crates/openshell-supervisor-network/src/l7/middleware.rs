@@ -337,6 +337,19 @@ pub fn uninspectable_traffic_gate(
     }
 }
 
+/// Entries whose service inspects content. TCP-only services observe
+/// connections without inspecting them, so they never make traffic
+/// "required to be inspectable".
+pub fn inspecting_entries(
+    runner: &openshell_supervisor_middleware::ChainRunner,
+    chain: Vec<openshell_supervisor_middleware::ChainEntry>,
+) -> Vec<openshell_supervisor_middleware::ChainEntry> {
+    chain
+        .into_iter()
+        .filter(|entry| runner.requires_inspection(&entry.implementation))
+        .collect()
+}
+
 /// Sandbox and originating process identity shown to middleware. The process
 /// is the one the connection's network policy resolved, without its pid.
 pub fn middleware_request_context(
