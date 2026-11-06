@@ -60,6 +60,8 @@ OpenShell applies middleware changes before it injects provider credentials. Mid
 
 Request output streams to the external service while the sandbox uploads. OpenShell instead buffers output when a stage selects WHOLE_BODY, the route needs SigV4 signing or body credential rewriting, or the request uses the forward proxy, HTTP/1.0, or `Upgrade`. JSON-RPC, MCP, and GraphQL endpoints also buffer output so OpenShell can check the replaced body against policy. Buffered output can be up to 10 MiB for SigV4 signing, 256 KiB for body credential rewriting, and 4 MiB otherwise. The preflight reports this limit to DUPLEX stages as `limits.max_output_body_bytes`. Larger output fails with `body_over_limit`.
 
+A DUPLEX stage can consume all input before sending `output_start`. The [Git-signing example](https://github.com/pimlock/OpenShell/tree/4359-git-signing-validation/pimlock/examples/supervisor-middleware-git-signing) uses this order to rewrite and sign a complete push without putting a signing key in the sandbox. It stores the push in a temporary file, then declares the replacement length and returns output chunks. Commit rewriting changes object IDs, so this prototype requires users to reconcile their local branches after pushing.
+
 ### Responses
 
 Your service receives the response status, headers, and request context. It can return `continue_without_body` or choose a body mode with `inspect`.
