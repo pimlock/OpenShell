@@ -108,6 +108,7 @@ To pin specific GPUs, pass `cdi_devices` for Docker or Podman, or `gpu_device_id
 ## Docker Driver
 
 [Docker](https://www.docker.com/get-started/) runs sandboxes as containers on the Docker daemon host. The gateway accesses the daemon through its configured Unix socket.
+For setup, mounts, and proxy settings, see the [Docker driver docs](driver-docker://setup).
 
 ```toml
 [openshell.gateway]
@@ -185,7 +186,7 @@ Mount targets cannot replace the workspace root, the container root, or OpenShel
 
 ## Podman Driver
 
-[Podman](https://podman.io/) runs sandboxes as rootless containers on the gateway host. It requires Podman 5.x, cgroups v2, and an active Podman user socket:
+[Podman](https://podman.io/) runs sandboxes as rootless containers on the gateway host. For setup, see the [Podman driver docs](driver-podman://setup). It requires Podman 5.x, cgroups v2, and an active Podman user socket:
 
 ```shell
 systemctl --user start podman.socket

@@ -116,12 +116,8 @@ navigation:
 - section: "SDK Reference"
   slug: sdk
   contents:
-  - page: "Go"
-    path: sdk/go.mdx
   - page: "Rust"
     path: sdk/rust.mdx
-  - page: "Python"
-    path: sdk/python.mdx
   - page: "TypeScript"
     path: sdk/typescript.mdx
     slug: typescript
